@@ -83,7 +83,13 @@ class Actor(ActorBase):
         self.action_mean, self.action_log_std, self.action_std = \
             self.forward(obs, state, phase)
         self.normal_action = self.action_mean + epsilon*self.action_std
+        # print("epsilon action: ", epsilon*self.action_std)
         self.action_dist = torch.distributions.Normal(self.action_mean, self.action_std)
+    
+    def reduceLogStd(self) -> float:
+        if self.log_std_init > 0.1:
+            self.log_std_init = 0.9999 * self.log_std_init
+        return self.log_std_init
 
     def sample(self, deterministic:bool=False) -> Tuple[torch.Tensor, torch.Tensor]:
         if deterministic:

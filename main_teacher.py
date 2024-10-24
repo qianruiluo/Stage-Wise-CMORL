@@ -18,6 +18,7 @@ import argparse
 import torch
 import wandb
 import time
+from datetime import datetime
 
 def getParser():
     parser = argparse.ArgumentParser()
@@ -91,7 +92,7 @@ def train(args, task_cfg, algo_cfg):
         if args.comment is not None:
             wandb.run.name = f"{args.name}/{args.comment}"
         else:
-            wandb.run.name = f"{args.name}"
+            wandb.run.name = f"{args.name}" + "_" + datetime.now().strftime("%b%d_%H-%M-%S")
 
     # slackbot
     if args.slack:
@@ -109,6 +110,7 @@ def train(args, task_cfg, algo_cfg):
     reward_sums_tensor = torch.zeros((args.n_envs, args.reward_dim), device=args.device, requires_grad=False, dtype=torch.float32)
     cost_sums_tensor = torch.zeros((args.n_envs, args.cost_dim), device=args.device, requires_grad=False, dtype=torch.float32)
     fail_sums_tensor = torch.zeros(args.n_envs, device=args.device, requires_grad=False, dtype=torch.float32)
+    fail_reason_sums_tensor = torch.zeros((args.n_envs, 3), device=args.device, requires_grad=False, dtype=torch.float32)
     env_cnts_tensor = torch.zeros(args.n_envs, device=args.device, requires_grad=False, dtype=torch.int)
     total_step = initial_step
     wandb_step = initial_step
@@ -140,11 +142,14 @@ def train(args, task_cfg, algo_cfg):
                 next_states_tensor = infos['next_states'][:, :-args.num_stages]
                 costs_tensor = infos['costs']
                 fails_tensor = infos['fails']
+                fail_reason_tensor = infos['fail_reasons']
                 dones_tensor = infos['dones']
 
             reward_sums_tensor += rewards_tensor
             cost_sums_tensor += costs_tensor
             fail_sums_tensor += fails_tensor
+            fail_reason_sums_tensor += fail_reason_tensor
+            
 
             agent.step(rewards_tensor, costs_tensor, dones_tensor, fails_tensor, 
                        next_obs_tensor, next_states_tensor, next_stages_tensor)
@@ -159,10 +164,15 @@ def train(args, task_cfg, algo_cfg):
                 reward_sums = reward_sums_tensor.detach().cpu().numpy()
                 cost_sums = cost_sums_tensor.detach().cpu().numpy()
                 fail_sums = fail_sums_tensor.detach().cpu().numpy()
+                fail_reason_sums = fail_reason_sums_tensor.detach().cpu().numpy()
                 if 'eplen' in logger.log_name_list: 
                     logger.writes('eplen', np.stack([env_cnts, env_cnts]).T.tolist())
                 if 'fail' in logger.log_name_list: 
                     logger.writes('fail', np.stack([env_cnts, fail_sums]).T.tolist())
+                    # logger.writes('fail_contact', np.stack([env_cnts, fail_reason_sums[:, 0]]).T.tolist())
+                    # logger.writes('fail_turn', np.stack([env_cnts, fail_reason_sums[:, 1]]).T.tolist())
+                    # logger.writes('fail_balance', np.stack([env_cnts, fail_reason_sums[:, 2]]).T.tolist())
+                    
                 for reward_idx in range(args.reward_dim):
                     log_name = f'reward_sum_{args.reward_names[reward_idx]}'
                     if log_name in logger.log_name_list:
@@ -174,6 +184,8 @@ def train(args, task_cfg, algo_cfg):
                 reward_sums_tensor[:] = 0
                 cost_sums_tensor[:] = 0
                 fail_sums_tensor[:] = 0
+                fail_reason_sums_tensor[:,:] = 0 
+                
                 env_cnts_tensor[:] = 0
 
                 # write log using wandb
@@ -187,9 +199,13 @@ def train(args, task_cfg, algo_cfg):
                     for log_name in agent_args.logging['cost_dep']:
                         log_data[f'{log_name}/{cost_name}'] = logger.get_avg(f'{log_name}_{cost_name}', print_len if 'sum' in log_name else print_len2)
                 for log_name in agent_args.logging['task_indep']:
-                    log_data[f"metric/{log_name}"] = logger.get_avg(log_name, print_len if log_name in ['eplen', 'fail'] else print_len2)
+                    log_data[f"metric/{log_name}"] = logger.get_avg(log_name, print_len if log_name in ['eplen', 'fail', 'fail_contact', 'fail_turn', 'fail_balance'] else print_len2)
                 wandb.log(log_data)
                 print(log_data)
+                mean = agent.actor.getMeanStd()[0].mean().detach().cpu().numpy()
+                std = agent.actor.getMeanStd()[1].mean().detach().cpu().numpy()
+                print("action mean: ", mean)
+                print("action  std: ", std)
 
             # send slack message
             if total_step - slack_step >= args.slack_freq and args.slack:
@@ -205,6 +221,11 @@ def train(args, task_cfg, algo_cfg):
         # train
         if agent.readyToTrain():
             train_results = agent.train()
+            
+            # adjust action std based on stages
+            # if stages_tensor[:, 4].mean().item() > -0.04:
+            #     agent.actor.getLogProb()
+                
             for log_name in train_results.keys():
                 if log_name in agent_args.logging['task_indep']:
                     logger.write(log_name, [args.n_steps, train_results[log_name]])
@@ -317,7 +338,11 @@ if __name__ == "__main__":
     args.algo_name = algo_cfg['name']
     args.name = f"{(args.task_name.lower())}_{(args.algo_name.lower())}"
     # save_dir
-    args.save_dir = f"results/{args.name}/seed_{args.seed}"
+    # args.save_dir = f"results/{args.name}/seed_{args.seed}_" + datetime.now().strftime("%b%d_%H-%M-%S") # for training
+    args.save_dir = f"results/{args.name}/seed_{args.seed}_Oct23_19-32-25" # for testing
+    
+    # args.save_dir = f"results/{args.name}/seed_{args.seed}"
+    
     # device
     if torch.cuda.is_available() and args.device_type == 'gpu':
         device_name = f'cuda:{args.gpu_idx}'

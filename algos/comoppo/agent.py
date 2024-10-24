@@ -210,6 +210,8 @@ class Agent(AgentBase):
         cur_action_dists = self.actor.getDist()
         kl = torch.mean(torch.sum(torch.distributions.kl.kl_divergence(old_action_dists, cur_action_dists), dim=-1))
         entropy = self.actor.getEntropy()
+        
+
 
         # adjust learning rate based on KL divergence
         if kl > self.max_kl*self.kl_tolerance:

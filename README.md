@@ -53,7 +53,10 @@ It is required to train a teacher poicy first, and then train a student policy u
 ### Teacher Learning
 
 - training: `python main_teacher.py --task_cfg_path tasks/{task_name}.yaml --algo_cfg_path algos/comoppo/{task_name}.yaml --wandb --seed 1`
+- pi backflip: 
+python main_teacher.py --task_cfg_path tasks/pi_backflip.yaml --algo_cfg_path algos/comoppo/pi_backflip.yaml --wandb --seed 1 --render
 - test: `python main_teacher.py --task_cfg_path tasks/{task_name}.yaml --algo_cfg_path algos/comoppo/{task_name}.yaml --test --render --seed 1 --model_num {saved_model_num}`
+python main_teacher.py --task_cfg_path tasks/pi_backflip.yaml --algo_cfg_path algos/comoppo/pi_backflip.yaml --test --render --seed 1 --model_num {saved_model_num}
 
 ### Student Learning
 

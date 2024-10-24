@@ -49,17 +49,16 @@ class Env(VecTask):
 
         """
         raw_obs: 
-            base orn (3), joint pos (12), joint vel (12), prev action (12), command (3)
+            base orn (3), joint pos (12), joint vel (12), prev action (12), central phase (4), command (3)
         observation: raw_obs * history_len
         state: 
-            linear velocity (3), angular vel (3), com height (1), foot contact (4), 
-            gravity (3), friction (1), restitution (1), stage (5)
+            linear vel (3), angular vel (3), com height (1), hand/foot contact (4), stage (5)
         """
         self.cfg = cfg
-        self.raw_obs_dim = 3 + 12*3 + 3
+        self.raw_obs_dim = 3 + 12*3 + 4 + 3
         self.history_len = self.cfg["env"]["history_len"]
         self.cfg['env']['numObservations'] = self.raw_obs_dim * self.history_len
-        self.cfg['env']['numStates'] = 3 + 3 + 1 + 4 + 3 + 1 + 1 + 5 
+        self.cfg['env']['numStates'] = 3 + 3 + 1 + 2 + 5 
         self.sim_dt = self.cfg["sim"]["sim_dt"]
         self.control_dt = self.cfg["sim"]["con_dt"]
         self.cfg["env"]["controlFrequencyInv"] = int(self.control_dt/self.sim_dt + 0.5)
@@ -68,31 +67,6 @@ class Env(VecTask):
         self.cfg['env']['enableCameraSensors'] = self.cfg['env']['enable_camera_sensors']
         self.cfg['env']['numEnvs'] = self.cfg['env']['num_envs']
         self.cfg['env']['numActions'] = 12
-        self.num_legs = 4
-
-        # for randomization
-        self.is_randomized = self.cfg["env"]["randomize"]["is_randomized"]
-        self.rand_period_motor_strength_s = self.cfg["env"]["randomize"]["rand_period_motor_strength_s"]
-        self.rand_period_gravity_s = self.cfg["env"]["randomize"]["rand_period_gravity_s"]
-        self.rand_period_motor_strength = int(self.rand_period_motor_strength_s/self.control_dt + 0.5)
-        self.rand_period_gravity = int(self.rand_period_gravity_s/self.control_dt + 0.5)
-        self.rand_range_body_mass = self.cfg["env"]["randomize"]["rand_range_body_mass"]
-        self.rand_range_com_pos_x = self.cfg["env"]["randomize"]["rand_range_com_pos_x"]
-        self.rand_range_com_pos_y = self.cfg["env"]["randomize"]["rand_range_com_pos_y"]
-        self.rand_range_com_pos_z = self.cfg["env"]["randomize"]["rand_range_com_pos_z"]
-        self.rand_range_dof_pos = self.cfg["env"]["randomize"]["rand_range_init_dof_pos"]
-        self.rand_range_root_vel = self.cfg["env"]["randomize"]["rand_range_init_root_vel"]
-        self.rand_range_motor_strength = self.cfg["env"]["randomize"]["rand_range_motor_strength"]
-        self.rand_range_gravity = self.cfg["env"]["randomize"]["rand_range_gravity"]
-        self.rand_range_friction = self.cfg["env"]["randomize"]["rand_range_friction"]
-        self.rand_range_restitution = self.cfg["env"]["randomize"]["rand_range_restitution"]
-        self.rand_range_motor_offset = self.cfg["env"]["randomize"]["rand_range_motor_offset"]
-        self.noise_range_dof_pos = self.cfg["env"]["randomize"]["noise_range_dof_pos"]
-        self.noise_range_dof_vel = self.cfg["env"]["randomize"]["noise_range_dof_vel"]
-        self.noise_range_body_orn = self.cfg["env"]["randomize"]["noise_range_body_orn"]
-        self.n_lag_action_steps = self.cfg["env"]["randomize"]["n_lag_action_steps"]
-        self.n_lag_imu_steps = self.cfg["env"]["randomize"]["n_lag_imu_steps"]
-        self.common_step_counter = 0
 
         """
         In the parent's __init__, generate the following member variables:
@@ -125,12 +99,17 @@ class Env(VecTask):
         self.max_episode_length = int(self.max_episode_length_s/self.control_dt + 0.5)
         self.reward_names = self.cfg["env"]["reward_names"]
         self.cost_names = self.cfg["env"]["cost_names"]
+        self.reward_scales = self.cfg["env"]["reward_scales"]
+        self.cost_scales = self.cfg["env"]["cost_scales"]
         self.stage_names = self.cfg["env"]["stage_names"]
         self.num_rewards = len(self.reward_names)
         self.num_costs = len(self.cost_names)
         self.num_stages = len(self.stage_names)
         self.action_smooth_weight = self.cfg["env"]["control"]["action_smooth_weight"]
         self.action_scale = self.cfg["env"]["control"]["action_scale"]
+        self.gait_freq = torch_utils.to_torch(
+            self.cfg["env"]["learn"]["gait_frequency"], 
+            dtype=torch.float32, device=self.device, requires_grad=False)
 
         # for buffer
         self.rew_buf = torch.zeros((self.num_envs, self.num_rewards),
@@ -140,7 +119,8 @@ class Env(VecTask):
         self.stage_buf = torch.zeros((self.num_envs, self.num_stages),
                                     dtype=torch.float32, device=self.device)
         self.fail_buf = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
-        # check the robot tumbling
+        self.fail_reason_buf = torch.zeros((self.num_envs, 3), dtype=torch.long, device=self.device)
+
         self.is_half_turn_buf = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self.is_one_turn_buf = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self.start_time_buf = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
@@ -202,11 +182,15 @@ class Env(VecTask):
 
         # get default joint (DoF) position
         self.named_default_joint_positions = self.cfg["env"]["default_joint_positions"]
+        self.named_sit_joint_positions = self.cfg["env"]["sit_joint_positions"]
         self.default_dof_positions = torch.zeros_like(
+            self.dof_positions, dtype=torch.float32, device=self.device, requires_grad=False)
+        self.sit_dof_positions = torch.zeros_like(
             self.dof_positions, dtype=torch.float32, device=self.device, requires_grad=False)
         for i in range(self.num_actions):
             name = self.dof_names[i]
             self.default_dof_positions[:, i] = self.named_default_joint_positions[name]
+            self.sit_dof_positions[:, i] = self.named_sit_joint_positions[name]
 
         # for inner variables
         self.world_x = torch.zeros(
@@ -215,35 +199,25 @@ class Env(VecTask):
             (self.num_envs, 3), dtype=torch.float32, device=self.device, requires_grad=False)
         self.world_z = torch.zeros(
             (self.num_envs, 3), dtype=torch.float32, device=self.device, requires_grad=False)
+        self.robot_up = torch.zeros(
+            (self.num_envs, 3), dtype=torch.float32, device=self.device, requires_grad=False)
         self.world_x[:, 0] = 1.0
         self.world_y[:, 1] = 1.0
         self.world_z[:, 2] = 1.0
+        self.robot_up[:, 2] = 0.3
         self.joint_targets = torch.zeros(
             (self.num_envs, self.num_dofs), 
             dtype=torch.float32, device=self.device, requires_grad=False)
         self.prev_actions = torch.zeros(
             (self.num_envs, self.num_dofs), 
             dtype=torch.float32, device=self.device, requires_grad=False)
-        self.motor_strengths = torch.ones((self.num_envs, self.num_dofs), dtype=torch.float32, device=self.device, requires_grad=False)
-        self.motor_offsets = torch.zeros((self.num_envs, self.num_dofs), dtype=torch.float32, device=self.device, requires_grad=False)
-        self.lag_joint_target_buffer = [torch.zeros_like(self.dof_positions) for _ in range(self.n_lag_action_steps + 1)]
-        self.lag_imu_buffer = [torch.zeros_like(self.world_z) for _ in range(self.n_lag_imu_steps + 1)]
-        self.prev_joint_targets = torch.zeros_like(self.joint_targets)
-        self.prev_prev_joint_targets = torch.zeros_like(self.joint_targets)
-        self.gravity = torch.tensor(self.cfg['sim']['gravity'], dtype=torch.float32, device=self.device, requires_grad=False)
 
         # for dof limits
-        dof_pos_lower_limits = []
-        dof_pos_upper_limits = []
-        for joint_name in ['hip', 'thigh', 'calf']:
-            joint_dict = self.cfg["env"]["learn"][f"{joint_name}_joint_limit"]
-            dof_pos_lower_limits.append(joint_dict['lower'] if 'lower' in joint_dict.keys() else -np.inf)
-            dof_pos_upper_limits.append(joint_dict['upper'] if 'upper' in joint_dict.keys() else np.inf)
         self.dof_pos_lower_limits = torch_utils.to_torch(
-            dof_pos_lower_limits*4, dtype=torch.float32, device=self.device, requires_grad=False)
+            self.cfg["env"]["learn"]["joint_pos_limit"]["lower"], dtype=torch.float32, device=self.device, requires_grad=False)
         self.dof_pos_lower_limits = torch.maximum(self.dof_pos_lower_limits, self.default_dof_pos_lower_limits)
         self.dof_pos_upper_limits = torch_utils.to_torch(
-            dof_pos_upper_limits*4, dtype=torch.float32, device=self.device, requires_grad=False)
+            self.cfg["env"]["learn"]["joint_pos_limit"]["upper"], dtype=torch.float32, device=self.device, requires_grad=False)
         self.dof_pos_upper_limits = torch.minimum(self.dof_pos_upper_limits, self.default_dof_pos_upper_limits)
         self.dof_vel_upper_limits = torch_utils.to_torch(
             self.cfg["env"]["learn"]["joint_vel_upper"], dtype=torch.float32, device=self.device, requires_grad=False)
@@ -252,42 +226,38 @@ class Env(VecTask):
             self.cfg["env"]["learn"]["joint_torque_upper"], dtype=torch.float32, device=self.device, requires_grad=False)
         self.dof_torques_upper_limits = torch.minimum(self.dof_torques_upper_limits, self.default_dof_torques_upper_limits)
 
-        # for noise observation
-        self.est_base_body_orns = torch.zeros(
-            (self.num_envs, 3), dtype=torch.float32, device=self.device, requires_grad=False)
-        self.est_dof_positions = torch.zeros(
-            (self.num_envs, self.num_dofs), dtype=torch.float32, device=self.device, requires_grad=False)
-        self.est_dof_velocities = torch.zeros(
-            (self.num_envs, self.num_dofs), dtype=torch.float32, device=self.device, requires_grad=False)    
-
         # for observation and action symmetric matrix
         self.joint_sym_mat = torch.zeros((self.num_dofs, self.num_dofs), device=self.device, dtype=torch.float32, requires_grad=False)
-        self.joint_sym_mat[:3, 3:6] = torch.eye(3, device=self.device, dtype=torch.float32)
-        self.joint_sym_mat[0, 3] = -1.0
-        self.joint_sym_mat[3:6, :3] = torch.eye(3, device=self.device, dtype=torch.float32)
-        self.joint_sym_mat[3, 0] = -1.0
-        self.joint_sym_mat[6:9, 9:12] = torch.eye(3, device=self.device, dtype=torch.float32)
-        self.joint_sym_mat[6, 9] = -1.0
-        self.joint_sym_mat[9:12, 6:9] = torch.eye(3, device=self.device, dtype=torch.float32)
-        self.joint_sym_mat[9, 6] = -1.0
+        self.joint_sym_mat[0, 6] = 1.0
+        self.joint_sym_mat[6, 0] = 1.0
+        self.joint_sym_mat[1:3, 7:9] = -torch.eye(2, device=self.device, dtype=torch.float32)
+        self.joint_sym_mat[7:9, 1:3] = -torch.eye(2, device=self.device, dtype=torch.float32)
+        
+        self.joint_sym_mat[3:6, 9:12] = torch.eye(3, device=self.device, dtype=torch.float32)
+        self.joint_sym_mat[9:12, 3:6] = torch.eye(3, device=self.device, dtype=torch.float32)
+        
+
+        
         self.obs_sym_mat = torch.zeros((self.num_obs, self.num_obs), device=self.device, dtype=torch.float32, requires_grad=False)
         raw_obs_sym_mat = torch.eye(self.raw_obs_dim, device=self.device, dtype=torch.float32, requires_grad=False)
         raw_obs_sym_mat[1, 1] = -1.0
         for i in range(3):
             raw_obs_sym_mat[(3+self.num_dofs*(i)):(3+self.num_dofs*(i+1)), (3+self.num_dofs*(i)):(3+self.num_dofs*(i+1))] = self.joint_sym_mat.clone()
-        raw_obs_sym_mat[3+3*self.num_dofs:, 3+3*self.num_dofs:] = torch.eye(3, device=self.device, dtype=torch.float32)
+        raw_obs_sym_mat[3+3*self.num_dofs:7+3*self.num_dofs, 3+3*self.num_dofs:7+3*self.num_dofs] = 0.0
+        raw_obs_sym_mat[3+3*self.num_dofs:5+3*self.num_dofs, 5+3*self.num_dofs:7+3*self.num_dofs] = torch.eye(2, device=self.device, dtype=torch.float32)
+        raw_obs_sym_mat[5+3*self.num_dofs:7+3*self.num_dofs, 3+3*self.num_dofs:5+3*self.num_dofs] = torch.eye(2, device=self.device, dtype=torch.float32)
+        raw_obs_sym_mat[7+3*self.num_dofs:, 7+3*self.num_dofs:] = torch.eye(3, device=self.device, dtype=torch.float32)        
         for i in range(self.history_len):
             self.obs_sym_mat[(self.raw_obs_dim*i):(self.raw_obs_dim*(i+1)), (self.raw_obs_dim*i):(self.raw_obs_dim*(i+1))] = raw_obs_sym_mat.clone()
         self.state_sym_mat = torch.eye(self.num_states - self.num_stages, device=self.device, dtype=torch.float32, requires_grad=False)
-        self.state_sym_mat[1, 1] = -1.0
-        self.state_sym_mat[3, 3] = -1.0
-        self.state_sym_mat[5, 5] = -1.0
-        self.state_sym_mat[7:11, 7:11] = 0
-        self.state_sym_mat[7, 8] = 1.0
-        self.state_sym_mat[8, 7] = 1.0
-        self.state_sym_mat[9, 10] = 1.0
-        self.state_sym_mat[10, 9] = 1.0
-        self.state_sym_mat[12, 12] = -1.0
+        # self.state_sym_mat[1, 1] = -1.0
+        # self.state_sym_mat[3, 3] = -1.0
+        # self.state_sym_mat[5, 5] = -1.0
+        # self.state_sym_mat[7:11, 7:11] = 0
+        # self.state_sym_mat[7, 8] = 1.0
+        # self.state_sym_mat[8, 7] = 1.0
+        # self.state_sym_mat[9, 10] = 1.0
+        # self.state_sym_mat[10, 9] = 1.0
 
 
     def create_sim(self):
@@ -327,22 +297,25 @@ class Env(VecTask):
 
         # load asset
         robot_asset = self.gym.load_asset(self.sim, asset_root, asset_file, asset_options)
-        self.num_dofs = self.gym.get_asset_dof_count(robot_asset) # 12
-        self.num_bodies = self.gym.get_asset_rigid_body_count(robot_asset) # 23
-        rigid_shape_props_asset = self.gym.get_asset_rigid_shape_properties(robot_asset)
+        self.num_dofs = self.gym.get_asset_dof_count(robot_asset) # 19
+        self.num_bodies = self.gym.get_asset_rigid_body_count(robot_asset) # 20
 
         # set friction and restitution
-        if self.is_randomized:
-            self.friction_coeffs = torch_utils.torch_rand_float(
-                self.rand_range_friction[0], self.rand_range_friction[1], (self.num_envs, 1), device=self.device)
-            self.restitution_coeffs = torch_utils.torch_rand_float(
-                self.rand_range_restitution[0], self.rand_range_restitution[1], (self.num_envs, 1), device=self.device)
-        else:
-            self.friction_coeffs = torch.ones((self.num_envs, 1), dtype=torch.float32, device=self.device, requires_grad=False)
-            self.restitution_coeffs = torch.zeros((self.num_envs, 1), dtype=torch.float32, device=self.device, requires_grad=False)
+        rigid_shape_prop = self.gym.get_asset_rigid_shape_properties(robot_asset)
+        for s in range(len(rigid_shape_prop)):
+            rigid_shape_prop[s].friction = 1.0
+            rigid_shape_prop[s].restitution = 0.0
+        self.gym.set_asset_rigid_shape_properties(robot_asset, rigid_shape_prop)
 
         # get an set dof property
+        self.link_names = self.gym.get_asset_rigid_body_names(robot_asset)
+        self.dof_names = self.gym.get_asset_dof_names(robot_asset)
         dof_props = self.gym.get_asset_dof_properties(robot_asset)
+        for i, joint_name in enumerate(self.dof_names):
+            for dof_name in self.cfg["env"]["control"]["stiffness"]:
+                if dof_name in joint_name:
+                    dof_props['stiffness'][i] = self.cfg["env"]["control"]["stiffness"][dof_name]
+                    dof_props['damping'][i] = self.cfg["env"]["control"]["damping"][dof_name]
         self.default_dof_pos_lower_limits = torch_utils.to_torch(
             dof_props['lower'], dtype=torch.float32, device=self.device, requires_grad=False)
         self.default_dof_pos_upper_limits = torch_utils.to_torch(
@@ -365,56 +338,67 @@ class Env(VecTask):
         for i in range(self.num_envs):
             # create env instance
             env_handle = self.gym.create_env(self.sim, env_lower, env_upper, num_envs_per_row)
-            # set rigid shape props
-            for s in range(len(rigid_shape_props_asset)):
-                rigid_shape_props_asset[s].friction = self.friction_coeffs[i, 0]
-                rigid_shape_props_asset[s].restitution = self.restitution_coeffs[i, 0]
-            self.gym.set_asset_rigid_shape_properties(robot_asset, rigid_shape_props_asset)
             # create robot instance
             robot_handle = self.gym.create_actor(env_handle, robot_asset, start_pose, "robot", i, 0, 0)
-            # ========== randomize base frame's mass & CoM position ========== #
-            if self.is_randomized:
-                body_props = self.gym.get_actor_rigid_body_properties(env_handle, robot_handle)
-                body_props[0].mass += (np.random.rand()\
-                                    *(self.rand_range_body_mass[1] - self.rand_range_body_mass[0]) \
-                                    + self.rand_range_body_mass[0])
-                com_x = np.random.rand() * (self.rand_range_com_pos_x[1] - self.rand_range_com_pos_x[0]) + self.rand_range_com_pos_x[0]
-                com_y = np.random.rand() * (self.rand_range_com_pos_y[1] - self.rand_range_com_pos_y[0]) + self.rand_range_com_pos_y[0]
-                com_z = np.random.rand() * (self.rand_range_com_pos_z[1] - self.rand_range_com_pos_z[0]) + self.rand_range_com_pos_z[0]
-                body_props[0].com = gymapi.Vec3(com_x, com_y, com_z)
-                self.gym.set_actor_rigid_body_properties(env_handle, robot_handle, body_props, recomputeInertia=True)
-            # ================================================================ #
             self.gym.set_actor_dof_properties(env_handle, robot_handle, dof_props)
             self.gym.enable_actor_dof_force_sensors(env_handle, robot_handle)
             self.robot_handles.append(robot_handle)
             self.env_handles.append(env_handle)
 
         # find link & joint names.
-        self.link_names = self.gym.get_asset_rigid_body_names(robot_asset)
-        self.dof_names = self.gym.get_asset_dof_names(robot_asset)
-        base_names = ['base']
-        hip_names = [s for s in self.link_names if 'hip' in s]
-        thigh_names = [s for s in self.link_names if 'thigh' in s]
-        calf_names = [s for s in self.link_names if 'calf' in s]
-        foot_names = [s for s in self.link_names if 'foot' in s]
-        terminate_touch_names = base_names + hip_names
-        undesired_touch_names = thigh_names + calf_names
+        base_names = ['base_link']     # 1
+        torso_names = ['torso_missing']     # 1
+        hand_names = [s for s in self.link_names if 'elbow_missing' in s]  # 2
+        shoulder_names = [s for s in self.link_names if 'shoulder_missing' in s]    # 6
+        hip_names = [s for s in self.link_names if 'hip_pitch' in s]   # 4
+        thigh_names = [s for s in self.link_names if 'thigh' in s or "hip_roll" in s]  # 2
+        calf_names = [s for s in self.link_names if 'calf' in s]    # 2
+        foot_names = [s for s in self.link_names if 'ankle_roll' in s]   # 2
+        terminate_touch_names = base_names
+        undesired_touch_names = torso_names + hip_names + thigh_names + calf_names
+        
+        # print("link names:", self.link_names)
 
-        # find foot & knee & hip & base's index
-        self.foot_indices = torch.zeros(
-            len(foot_names), dtype=torch.long, device=self.device, requires_grad=False)
+        # find hand & foot & knee & hip & base's index
+        self.torso_indices = torch.zeros(
+            len(torso_names), dtype=torch.long, device=self.device, requires_grad=False)
+        self.hand_indices = torch.zeros(
+            len(hand_names), dtype=torch.long, device=self.device, requires_grad=False)
+        self.shoulder_indices = torch.zeros(
+            len(shoulder_names), dtype=torch.long, device=self.device, requires_grad=False)
+        self.hip_indices = torch.zeros(
+            len(hip_names), dtype=torch.long, device=self.device, requires_grad=False)
+        self.thigh_indices = torch.zeros(
+            len(thigh_names), dtype=torch.long, device=self.device, requires_grad=False)
         self.calf_indices = torch.zeros(
             len(calf_names), dtype=torch.long, device=self.device, requires_grad=False)
+        self.foot_indices = torch.zeros(
+            len(foot_names), dtype=torch.long, device=self.device, requires_grad=False)
         self.terminate_touch_indices = torch.zeros(
             len(terminate_touch_names), dtype=torch.long, device=self.device, requires_grad=False)
         self.undesired_touch_indices = torch.zeros(
             len(undesired_touch_names), dtype=torch.long, device=self.device, requires_grad=False)
-        for i in range(len(foot_names)):
-            self.foot_indices[i] = self.gym.find_actor_rigid_body_handle(
-                self.env_handles[0], self.robot_handles[0], foot_names[i])
+        for i in range(len(torso_names)):
+            self.torso_indices[i] = self.gym.find_actor_rigid_body_handle(
+                self.env_handles[0], self.robot_handles[0], torso_names[i])
+        for i in range(len(hand_names)):
+            self.hand_indices[i] = self.gym.find_actor_rigid_body_handle(
+                self.env_handles[0], self.robot_handles[0], hand_names[i])
+        for i in range(len(shoulder_names)):
+            self.shoulder_indices[i] = self.gym.find_actor_rigid_body_handle(
+                self.env_handles[0], self.robot_handles[0], shoulder_names[i])
+        for i in range(len(hip_names)):
+            self.hip_indices[i] = self.gym.find_actor_rigid_body_handle(
+                self.env_handles[0], self.robot_handles[0], hip_names[i])
+        for i in range(len(thigh_names)):
+            self.thigh_indices[i] = self.gym.find_actor_rigid_body_handle(
+                self.env_handles[0], self.robot_handles[0], thigh_names[i])
         for i in range(len(calf_names)):
             self.calf_indices[i] = self.gym.find_actor_rigid_body_handle(
                 self.env_handles[0], self.robot_handles[0], calf_names[i])
+        for i in range(len(foot_names)):
+            self.foot_indices[i] = self.gym.find_actor_rigid_body_handle(
+                self.env_handles[0], self.robot_handles[0], foot_names[i])
         for i in range(len(terminate_touch_names)):
             self.terminate_touch_indices[i] = self.gym.find_actor_rigid_body_handle(
                 self.env_handles[0], self.robot_handles[0], terminate_touch_names[i])
@@ -437,38 +421,19 @@ class Env(VecTask):
         env_ids_int32 = env_ids.to(dtype=torch.int32)
 
         # reset dof position & velocity
-        # ==================== randomize initial dof position ==================== #
-        if self.is_randomized:
-            positions_offset = torch_utils.torch_rand_float(
-                self.rand_range_dof_pos[0], self.rand_range_dof_pos[1], (len(env_ids), self.num_dofs), device=self.device)
-        else:
-            positions_offset = torch.ones((len(env_ids), self.num_dofs), dtype=torch.float32, device=self.device)
+        positions_offset = torch_utils.torch_rand_float(0.9, 1.1, (len(env_ids), self.num_dofs), device=self.device)
+        velocities = torch_utils.torch_rand_float(-0.1, 0.1, (len(env_ids), self.num_dofs), device=self.device)
         self.dof_positions[env_ids] = self.default_dof_positions[env_ids] * positions_offset
-        self.dof_velocities[env_ids] = 0.0
-        # ======================================================================== #
+        self.dof_velocities[env_ids] = velocities
         self.gym.set_dof_state_tensor_indexed(self.sim,
                                               gymtorch.unwrap_tensor(self.dof_states),
                                               gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32))
 
         # reset robot's base frame pose
         self.root_states[env_ids] = self.base_init_state
-        # ==================== randomize initial root state ==================== #
-        if self.is_randomized:
-            initial_lin_vel = torch_utils.torch_rand_float(
-                self.rand_range_root_vel[0], self.rand_range_root_vel[1], (len(env_ids), 3), device=self.device)
-            initial_ang_vel = torch_utils.torch_rand_float(
-                self.rand_range_root_vel[0], self.rand_range_root_vel[1], (len(env_ids), 3), device=self.device)
-            self.root_states[env_ids, 7:10] += initial_lin_vel
-            self.root_states[env_ids, 10:13] += initial_ang_vel
-        # ====================================================================== #
         self.gym.set_actor_root_state_tensor_indexed(self.sim,
                                                      gymtorch.unwrap_tensor(self.root_states),
                                                      gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32))
-
-        # ==== apply randomization ==== #
-        if self.is_randomized:
-            self.randomize(env_ids)
-        # ============================= #
 
         # refresh tensors
         self.gym.refresh_dof_state_tensor(self.sim)
@@ -476,12 +441,6 @@ class Env(VecTask):
         self.gym.refresh_actor_root_state_tensor(self.sim)
         self.gym.refresh_net_contact_force_tensor(self.sim)
         self.gym.refresh_rigid_body_state_tensor(self.sim)
-
-        # reset inner variables
-        self.joint_targets[env_ids] = self.dof_positions[env_ids] + self.motor_offsets[env_ids] 
-        self.prev_joint_targets[env_ids] = self.joint_targets[env_ids].clone()
-        self.prev_prev_joint_targets[env_ids] = self.joint_targets[env_ids].clone()
-        self.prev_actions[env_ids] = (self.joint_targets[env_ids] - self.default_dof_positions[env_ids])/self.action_scale
 
         # reset buffers
         self.progress_buf[env_ids] = 0
@@ -491,26 +450,13 @@ class Env(VecTask):
         self.stage_buf[env_ids, 0] = 1.0
         self.is_half_turn_buf[env_ids] = 0
         self.is_one_turn_buf[env_ids] = 0
-        self.start_time_buf[env_ids] = torch_utils.torch_rand_float(0.0, 5.0, (len(env_ids), 1), device=self.device).squeeze()
+        self.start_time_buf[env_ids] = torch_utils.torch_rand_float(0.0, 3.0, (len(env_ids), 1), device=self.device).squeeze()
         self.cmd_time_buf[env_ids] = 0.0
         self.land_time_buf[env_ids] = 0.0
-        for i in range(len(self.lag_joint_target_buffer)):
-            self.lag_joint_target_buffer[i][env_ids, :] = self.joint_targets[env_ids]
-        for i in range(len(self.lag_imu_buffer)):
-            self.lag_imu_buffer[i][env_ids, :] = self.est_base_body_orns[env_ids]
 
-        # estimate observations
-        self.est_base_body_orns[env_ids] = torch_utils.quat_rotate_inverse(self.base_quaternions[env_ids], self.world_z[env_ids])
-        self.est_dof_positions[env_ids] = self.dof_positions[env_ids] + self.motor_offsets[env_ids]
-        self.est_dof_velocities[env_ids] = self.dof_velocities[env_ids]
-        if self.is_randomized:
-            self.est_base_body_orns[env_ids] += torch_utils.torch_rand_float(
-                -self.noise_range_body_orn, self.noise_range_body_orn, (len(env_ids), 3), device=self.device)
-            self.est_base_body_orns[env_ids] /= torch.norm(self.est_base_body_orns[env_ids], dim=-1, keepdim=True)
-            self.est_dof_positions[env_ids] += torch_utils.torch_rand_float(
-                -self.noise_range_dof_pos, self.noise_range_dof_pos, (len(env_ids), self.num_dofs), device=self.device)
-            self.est_dof_velocities[env_ids] += torch_utils.torch_rand_float(
-                -self.noise_range_dof_vel, self.noise_range_dof_vel, (len(env_ids), self.num_dofs), device=self.device)
+        # reset inner variables
+        self.prev_actions[env_ids] = 0
+        self.joint_targets[env_ids] = self.dof_positions[env_ids]
 
         # calculate commands
         commands = torch.zeros((len(env_ids), 3), dtype=torch.float32, device=self.device)
@@ -523,71 +469,28 @@ class Env(VecTask):
 
         # reset observation
         obs = jit_compute_observations(
-            self.est_base_body_orns[env_ids], self.est_dof_positions[env_ids], self.est_dof_velocities[env_ids], 
-            self.prev_actions[env_ids], commands)
+            self.base_quaternions[env_ids], self.world_z[env_ids], 
+            self.dof_positions[env_ids], self.dof_velocities[env_ids], 
+            self.prev_actions[env_ids], self.progress_buf[env_ids]*self.control_dt, self.gait_freq, commands)
         for history_idx in range(self.history_len):
             self.obs_buf[env_ids, history_idx*self.raw_obs_dim:(history_idx+1)*self.raw_obs_dim] = obs
-        
+
         # reset state
         contact_forces = self.contact_forces[env_ids]
+        hand_contact_forces = contact_forces[:, self.hand_indices, :]
         foot_contact_forces = contact_forces[:, self.foot_indices, :]
-        calf_contact_forces = contact_forces[:, self.calf_indices, :]
         self.states_buf[env_ids] = jit_compute_states(
             self.base_quaternions[env_ids], self.base_lin_vels[env_ids], self.base_ang_vels[env_ids], self.base_positions[env_ids],
-            foot_contact_forces, calf_contact_forces, self.gravity, 
-            self.friction_coeffs[env_ids], self.restitution_coeffs[env_ids], self.stage_buf[env_ids])
-
-        if self.viewer != None:
-            cam_pos = torch.tensor(np.array([[0.0, 3.0, 1.0]]), dtype=torch.float32, device=self.device)
-            # print("base_pos:", self.base_positions)
-            cam_pos += self.base_positions[0]
-            cam_pos = gymapi.Vec3(*cam_pos[0])
-            cam_target = gymapi.Vec3(*self.base_positions[0])
-            self.gym.viewer_camera_look_at(
-                self.viewer, self.env_handles[0], cam_pos, cam_target)
-
-    def step(self, actions: torch.Tensor):
-        action_tensor = torch.clamp(actions, -self.clip_actions, self.clip_actions)
-        self.pre_physics_step(action_tensor)
-
-        # step physics and render each frame
-        for i in range(self.control_freq_inv):
-            if self.force_render:
-                self.render()
-
-            # calculate torques using PD control
-            self.lag_joint_target_buffer = self.lag_joint_target_buffer[1:] + [self.joint_targets]
-            joint_targets = self.lag_joint_target_buffer[0]
-            current_dof_positions = self.dof_positions + self.motor_offsets
-            current_dof_velocities = self.dof_velocities
-            torques = self.cfg["env"]["control"]["stiffness"]*(joint_targets - current_dof_positions) \
-                        - self.cfg["env"]["control"]["damping"]*current_dof_velocities
-            torques = torch.clip(
-                torques*self.motor_strengths, -self.dof_torques_upper_limits.unsqueeze(0), 
-                self.dof_torques_upper_limits.unsqueeze(0))
-            self.gym.set_dof_actuation_force_tensor(self.sim, gymtorch.unwrap_tensor(torques))
-            self.gym.simulate(self.sim)
-            if self.device == 'cpu':
-                self.gym.fetch_results(self.sim, True)
-            self.gym.refresh_dof_state_tensor(self.sim)
-
-        # compute observations, rewards, resets, ...
-        self.post_physics_step()
-        self.obs_dict["obs"] = torch.clamp(self.obs_buf, -self.clip_obs, self.clip_obs).to(self.rl_device)
-        if self.num_states > 0:
-            self.obs_dict["states"] = self.get_state()
-        return self.obs_dict, self.rew_buf.to(self.rl_device), self.reset_buf.to(self.rl_device), self.extras
+            hand_contact_forces, foot_contact_forces, self.stage_buf[env_ids])
 
     def pre_physics_step(self, actions: torch.Tensor):
         # update previous actions
         self.prev_actions[:] = actions
-        self.prev_prev_joint_targets[:] = self.prev_joint_targets
-        self.prev_joint_targets[:] = self.joint_targets
 
         # set PD targets
-        smooth_weight = self.action_smooth_weight
-        self.joint_targets[:] = smooth_weight*(actions*self.action_scale + self.default_dof_positions) \
-                                + (1.0 - smooth_weight)*self.joint_targets
+        self.joint_targets[:] = self.action_smooth_weight*(actions*self.action_scale + self.default_dof_positions) \
+                                                            + (1.0 - self.action_smooth_weight)*self.joint_targets
+        self.gym.set_dof_position_target_tensor(self.sim, gymtorch.unwrap_tensor(self.joint_targets))
 
     def post_physics_step(self):
         """
@@ -605,55 +508,74 @@ class Env(VecTask):
         self.gym.refresh_net_contact_force_tensor(self.sim)
         self.gym.refresh_rigid_body_state_tensor(self.sim)
         self.progress_buf += 1
-        self.common_step_counter += 1
-
-        # ==== apply randomization ==== #
-        if self.is_randomized:
-            self.randomize()
-        # ============================= #
 
         # stage 0: stand, stage 1: down, stage 2: jump, stage 3: back turn, stage 4: land
         # =================== calculate rewards =================== #
         # com height
+        jump_pos = self.base_positions + torch_utils.quat_rotate(self.base_quaternions, self.robot_up)
+        jump_height = jump_pos[:, 2]
         com_height = self.base_positions[:, 2]
-        self.rew_buf[:, 0] =  self.stage_buf[:, 0]*(-torch.abs(com_height - 0.35))
-        self.rew_buf[:, 0] += self.stage_buf[:, 1]*(-torch.abs(com_height - 0.2))
-        self.rew_buf[:, 0] += self.stage_buf[:, 2]*(com_height <= 0.5)*(com_height)
-        self.rew_buf[:, 0] += self.stage_buf[:, 3]*(com_height <= 0.5)*(com_height)
-        self.rew_buf[:, 0] += self.stage_buf[:, 4]*(-torch.abs(com_height - 0.35))
+        # print("com_height:", torch.mean(com_height), com_height[0])
+        # print("jump_height:", jump_height[0])
+        
+        self.rew_buf[:, 0]  = self.stage_buf[:, 0]*(-torch.abs(com_height - 0.34))
+        self.rew_buf[:, 0] += self.stage_buf[:, 1]*(-torch.abs(com_height - 0.24))
+        self.rew_buf[:, 0] += self.stage_buf[:, 2]*(jump_height <= 1.2)*(jump_height)
+        self.rew_buf[:, 0] += self.stage_buf[:, 3]*(jump_height <= 1.2)*(jump_height)
+        # self.rew_buf[:, 0] += self.stage_buf[:, 2]*(-10.0*torch.square(com_height - 0.5))
+        # self.rew_buf[:, 0] += self.stage_buf[:, 3]*(-10.0*torch.square(com_height - 0.5))
+        self.rew_buf[:, 0] += self.stage_buf[:, 4]*(-torch.abs(com_height - 0.34))
         # body balance
         body_z = torch_utils.quat_rotate_inverse(self.base_quaternions, self.world_z)
+        # print("body_z:", torch.mean(-torch.arccos(body_z[:, 2])))
         self.rew_buf[:, 1] =  self.stage_buf[:, 0]*(-torch.arccos(torch.clamp(body_z[:, 2], -1.0, 1.0)))
         self.rew_buf[:, 1] += self.stage_buf[:, 1]*(-torch.arccos(torch.clamp(body_z[:, 2], -1.0, 1.0)))
-        self.rew_buf[:, 1] += self.stage_buf[:, 2]*(-torch.abs(torch.arccos(torch.clamp(body_z[:, 0], -1.0, 1.0)) - np.pi/2.0))
-        self.rew_buf[:, 1] += self.stage_buf[:, 3]*(-torch.abs(torch.arccos(torch.clamp(body_z[:, 0], -1.0, 1.0)) - np.pi/2.0))
+        self.rew_buf[:, 1] += self.stage_buf[:, 2]*(-torch.abs(torch.arccos(torch.clamp(body_z[:, 1], -1.0, 1.0)) - np.pi/2.0))
+        self.rew_buf[:, 1] += self.stage_buf[:, 3]*(-torch.abs(torch.arccos(torch.clamp(body_z[:, 1], -1.0, 1.0)) - np.pi/2.0))
         self.rew_buf[:, 1] += self.stage_buf[:, 4]*(-torch.arccos(torch.clamp(body_z[:, 2], -1.0, 1.0)))
-        # rot vel
+        # pitch vel
         base_lin_vels = torch_utils.quat_rotate_inverse(self.base_quaternions, self.base_lin_vels)
+        # print("base lin vels:", base_lin_vels)
         base_ang_vels = torch_utils.quat_rotate_inverse(self.base_quaternions, self.base_ang_vels)
-        vel_penalty = torch.square(base_lin_vels[:, 0]) + torch.square(base_lin_vels[:, 1]) + torch.square(base_ang_vels[:, 2])
-        base_ang_vel_x = base_ang_vels[:, 0]
-        self.rew_buf[:, 2] =  self.stage_buf[:, 0]*(-vel_penalty)
-        self.rew_buf[:, 2] += self.stage_buf[:, 1]*(-vel_penalty)
-        self.rew_buf[:, 2] += self.stage_buf[:, 2]*(1.0 - self.is_one_turn_buf)*(base_ang_vel_x)
-        self.rew_buf[:, 2] += self.stage_buf[:, 3]*(1.0 - self.is_one_turn_buf)*(base_ang_vel_x)
-        self.rew_buf[:, 2] += self.stage_buf[:, 4]*(-vel_penalty)
+        base_vel_penalties = torch.square(base_lin_vels[:, 0]) + torch.square(base_lin_vels[:, 1]) + torch.square(base_ang_vels[:, 2])
+        self.rew_buf[:, 2]  = self.stage_buf[:, 0]*(-base_vel_penalties)
+        self.rew_buf[:, 2] += self.stage_buf[:, 1]*(-base_vel_penalties)
+        self.rew_buf[:, 2] += self.stage_buf[:, 2]*((1.0 - self.is_one_turn_buf)*(-base_ang_vels[:, 1]) + 10.0 * base_lin_vels[:, 2] \
+            - torch.abs(base_ang_vels[:, 0]) - torch.abs(base_ang_vels[:, 2]))
+        self.rew_buf[:, 2] += self.stage_buf[:, 3]*(1.0 - self.is_one_turn_buf)*(-base_ang_vels[:, 1])
+        self.rew_buf[:, 2] += self.stage_buf[:, 4]*(-base_vel_penalties)
         # energy
         self.rew_buf[:, 3] = -torch.square(self.dof_torques).mean(dim=-1)
         # style
-        self.rew_buf[:, 4]  = -torch.square(self.dof_positions - self.default_dof_positions).mean(dim=-1)
+        self.rew_buf[:, 4]  = self.stage_buf[:, 0]*(-torch.square(self.dof_positions - self.default_dof_positions).mean(dim=-1))
+        self.rew_buf[:, 4] += self.stage_buf[:, 1]*(-torch.square(self.dof_positions - self.sit_dof_positions).mean(dim=-1))
+        self.rew_buf[:, 4] += self.stage_buf[:, 2]*(-torch.square(self.dof_positions - self.default_dof_positions).mean(dim=-1))
+        self.rew_buf[:, 4] += self.stage_buf[:, 3]*(-torch.square(self.dof_positions - self.sit_dof_positions).mean(dim=-1))
+        self.rew_buf[:, 4] += self.stage_buf[:, 4]*(-torch.square(self.dof_positions - self.default_dof_positions).mean(dim=-1))
+        
+        for i in range(0, 5):
+            self.rew_buf[:, i] = self.rew_buf[:, i] * self.reward_scales[i]
         # ========================================================= #
         # ==================== calculate costs ==================== #
         # foot contact
-        foot_contact_threshold = 0.25
+        foot_contact_threshold = 0.5
         foot_contact_forces = self.contact_forces[:, self.foot_indices, :]
-        calf_contact_forces = self.contact_forces[:, self.calf_indices, :]
-        foot_contact = ((torch.norm(foot_contact_forces, dim=2) > 10.0)|(torch.norm(calf_contact_forces, dim=2) > 10.0)).type(torch.float)
-        self.cost_buf[:, 0] =  self.stage_buf[:, 0]*(foot_contact_threshold)
-        self.cost_buf[:, 0] += self.stage_buf[:, 1]*(foot_contact_threshold)
-        self.cost_buf[:, 0] += self.stage_buf[:, 2]*(1.0 - (foot_contact[:, 1] + foot_contact[:, 3])/2.0)
-        self.cost_buf[:, 0] += self.stage_buf[:, 3]*(foot_contact_threshold)
-        self.cost_buf[:, 0] += self.stage_buf[:, 4]*(foot_contact_threshold)
+        hand_contact_forces = self.contact_forces[:, self.hand_indices, :]
+        foot_contact = (torch.norm(foot_contact_forces, dim=2) > 15).type(torch.float)
+        # print("foot contact force: ", torch.norm(foot_contact_forces, dim=2))
+        left_phase = (self.obs_buf[:, -6] <= 0).to(torch.float)
+        right_phase = (self.obs_buf[:, -4] <= 0).to(torch.float)
+        # print("foot_contact:", foot_contact[0], foot_contact.mean(dim=-1))
+        # print("phase:", left_phase[0], right_phase[0])
+        
+        foot_contact_cost  = left_phase*(1.0 - foot_contact[:, 0]) + (1.0 - left_phase)*foot_contact[:, 0]
+        foot_contact_cost += right_phase*(1.0 - foot_contact[:, 1]) + (1.0 - right_phase)*foot_contact[:, 1]
+        foot_contact_cost /= 2.0
+        self.cost_buf[:, 0]  = self.stage_buf[:, 0]*foot_contact_cost
+        self.cost_buf[:, 0] += self.stage_buf[:, 1]*(foot_contact.mean(dim=-1) < 1.0)
+        self.cost_buf[:, 0] += self.stage_buf[:, 2]*(foot_contact.mean(dim=-1) < 1.0)*(3.0 - base_lin_vels[:, 2])
+        self.cost_buf[:, 0] += self.stage_buf[:, 3]*(foot_contact.mean(dim=-1) > 0.1)
+        self.cost_buf[:, 0] += self.stage_buf[:, 4]*foot_contact_threshold
         # body contact
         term_contact = torch.any(torch.norm(self.contact_forces[:, self.terminate_touch_indices, :], dim=-1) > 1.0, dim=-1)
         undesired_contact = torch.any(torch.norm(self.contact_forces[:, self.undesired_touch_indices, :], dim=-1) > 1.0, dim=-1)
@@ -670,12 +592,25 @@ class Env(VecTask):
         self.cost_buf[:, 3] = torch.mean(
             (torch.abs(self.dof_velocities) > self.dof_vel_upper_limits).to(torch.float), dim=-1)
         # joint torque
+        # self.cost_buf[:, 4] = torch.mean(
+        #     (torch.abs(self.dof_torques) > self.dof_torques_upper_limits).to(torch.float), dim=-1)
         self.cost_buf[:, 4] = torch.mean(
-            (torch.abs(self.dof_torques) > self.dof_torques_upper_limits).to(torch.float), dim=-1)
+            (torch.abs(self.dof_torques) > self.dof_torques_upper_limits) \
+                * torch.square((torch.abs(self.dof_torques) - self.dof_torques_upper_limits)), dim=-1)
+        if torch.any(self.dof_torques[0] > 19.0):
+            print("torque: ", self.dof_torques[0])
+        
+        for i in range(0, 5):
+            self.cost_buf[:, i] = self.cost_buf[:, i] * self.cost_scales[i]
+        
         # ========================================================= #
 
         # update stage
         # have to handle in the following order: N -> N-1 -> N-2 ... -> 1 -> 0.
+        from4_to0 = torch.logical_and(self.stage_buf[:, 4] == 1.0, 
+            self.progress_buf*self.control_dt > self.land_time_buf + 0.4).type(torch.float32)
+        self.stage_buf[:, 4] = (1.0 - from4_to0)*self.stage_buf[:, 4]
+        self.stage_buf[:, 0] = from4_to0 + (1.0 - from4_to0)*self.stage_buf[:, 0]
         from3_to4 = torch.logical_and(
             self.stage_buf[:, 3] == 1.0, torch.logical_and(
                 foot_contact.mean(dim=-1) > 0.0,
@@ -685,38 +620,32 @@ class Env(VecTask):
         self.stage_buf[:, 3] = (1.0 - from3_to4)*self.stage_buf[:, 3]
         self.stage_buf[:, 4] = from3_to4 + (1.0 - from3_to4)*self.stage_buf[:, 4]
         from2_to3 = torch.logical_and(
-            self.stage_buf[:, 2] == 1.0, 
-            foot_contact.mean(dim=-1) < 0.1
-        ).type(torch.float32)
+            self.stage_buf[:, 2] == 1.0, torch.logical_and(
+                foot_contact.mean(dim=-1) < 0.1,
+                com_height >= 0.3)).type(torch.float32)
         self.stage_buf[:, 2] = (1.0 - from2_to3)*self.stage_buf[:, 2]
         self.stage_buf[:, 3] = from2_to3 + (1.0 - from2_to3)*self.stage_buf[:, 3]
         from1_to2 = torch.logical_and(
             self.stage_buf[:, 1] == 1.0, torch.logical_and(
-                com_height <= 0.25, 
-                foot_contact.mean(dim=-1) >= 0.9
-            )
-        ).type(torch.float32)
+                com_height <= 0.26, foot_contact.mean(dim=-1) >= 1.0)).type(torch.float32)
         self.stage_buf[:, 1] = (1.0 - from1_to2)*self.stage_buf[:, 1]
         self.stage_buf[:, 2] = from1_to2 + (1.0 - from1_to2)*self.stage_buf[:, 2]
         from0_to1 = torch.logical_and(
             self.stage_buf[:, 0] == 1.0, torch.logical_and(
                 self.progress_buf*self.control_dt > self.start_time_buf, torch.logical_and(
-                    com_height >= 0.3, 
-                    self.is_half_turn_buf == 0
-                )
-            )
-        ).type(torch.float32)
+                    com_height >= 0.32, self.is_half_turn_buf == 0))).type(torch.float32)
         self.stage_buf[:, 0] = (1.0 - from0_to1)*self.stage_buf[:, 0]
         self.stage_buf[:, 1] = from0_to1 + (1.0 - from0_to1)*self.stage_buf[:, 1]
 
         # check the robot tumbling
         self.is_half_turn_buf[:] = torch.logical_or(
             self.is_half_turn_buf, torch.logical_and(
-                body_z[:, 1] < 0, body_z[:, 2] < 0)).type(torch.long)
+                base_ang_vels[:, 1] < 0, torch.logical_and(
+                    body_z[:, 2] < 0, body_z[:, 0] < 0))).type(torch.long)
         self.is_one_turn_buf[:] = torch.logical_or(
             self.is_one_turn_buf, torch.logical_and(
                 self.is_half_turn_buf, torch.logical_and(
-                    body_z[:, 1] >= 0, body_z[:, 2] >= 0))).type(torch.long)
+                    body_z[:, 0] >= 0, body_z[:, 2] >= 0))).type(torch.long)
         land_masks = torch.logical_and(self.land_time_buf == 0, self.stage_buf[:, 4] == 1).type(torch.float32)
         self.land_time_buf[:] = land_masks*(self.progress_buf*self.control_dt) + (1.0 - land_masks)*self.land_time_buf
         cmd_masks = torch.logical_and(self.cmd_time_buf == 0, self.stage_buf[:, 1] == 1).type(torch.float32)
@@ -725,28 +654,27 @@ class Env(VecTask):
         # check termination
         body_contacts = torch.any(torch.norm(self.contact_forces[:, self.terminate_touch_indices, :], dim=-1) > 1.0, dim=-1)
         landing_wo_turns = torch.logical_and(self.stage_buf[:, 3] == 1.0, torch.logical_and(foot_contact.mean(dim=-1) > 0.0, 1 - self.is_half_turn_buf))
-        self.fail_buf[:] = torch.logical_or(body_contacts, landing_wo_turns).type(torch.long)
+        body_balances = torch.logical_and(self.stage_buf[:, 0] + self.stage_buf[:, 1] + self.stage_buf[:, 2] >= 1.0, body_z[:, 2] < 0.4)
+        self.fail_buf[:] = torch.logical_or(body_contacts, torch.logical_or(landing_wo_turns, body_balances)).type(torch.long)
+        
+        self.fail_reason_buf[:, 0] = body_contacts
+        self.fail_reason_buf[:, 1] = landing_wo_turns
+        self.fail_reason_buf[:, 2] = body_balances
+        
+        if self.fail_reason_buf[0, 0] + self.fail_reason_buf[0, 1] + self.fail_reason_buf[0, 2]:
+            if self.fail_reason_buf[0, 0]:
+                print("env 0 fail: body contact")
+            if self.fail_reason_buf[0, 1]:
+                print("env 0 fail: landing_wo_turn")
+            if self.fail_reason_buf[0, 2]:
+                print("env 0 fail: body balance")
+        
 
-        # calculate reset buffer
+        # calculate reset buffer        
         self.reset_buf[:] = torch.where(
             self.progress_buf >= self.max_episode_length, 
             torch.ones_like(self.reset_buf), self.fail_buf
         )
-
-        # estimate observations
-        est_base_body_orns = torch_utils.quat_rotate_inverse(self.base_quaternions, self.world_z)
-        self.est_dof_positions = self.dof_positions + self.motor_offsets
-        self.est_dof_velocities = self.dof_velocities
-        if self.is_randomized:
-            est_base_body_orns += torch_utils.torch_rand_float(
-                -self.noise_range_body_orn, self.noise_range_body_orn, (self.num_envs, 3), device=self.device)
-            est_base_body_orns /= torch.norm(est_base_body_orns, dim=-1, keepdim=True)
-            self.est_dof_positions += torch_utils.torch_rand_float(
-                -self.noise_range_dof_pos, self.noise_range_dof_pos, (self.num_envs, self.num_dofs), device=self.device)
-            self.est_dof_velocities += torch_utils.torch_rand_float(
-                -self.noise_range_dof_vel, self.noise_range_dof_vel, (self.num_envs, self.num_dofs), device=self.device)
-        self.lag_imu_buffer = self.lag_imu_buffer[1:] + [est_base_body_orns]
-        self.est_base_body_orns[:] = self.lag_imu_buffer[0]
 
         # calculate commands
         commands = torch.zeros((self.num_envs, 3), dtype=torch.float32, device=self.device)
@@ -759,15 +687,16 @@ class Env(VecTask):
 
         # update observation buffer
         obs = jit_compute_observations(
-            self.est_base_body_orns, self.est_dof_positions, self.est_dof_velocities, 
-            self.prev_actions, commands)
+            self.base_quaternions, self.world_z, 
+            self.dof_positions, self.dof_velocities, 
+            self.prev_actions, self.progress_buf*self.control_dt, self.gait_freq, commands)
         self.obs_buf[:, :-self.raw_obs_dim] = self.obs_buf[:, self.raw_obs_dim:].clone()
         self.obs_buf[:, -self.raw_obs_dim:] = obs
 
         # update state buffer
         self.states_buf[:] = jit_compute_states(
             self.base_quaternions, self.base_lin_vels, self.base_ang_vels, self.base_positions,
-            foot_contact_forces, calf_contact_forces, self.gravity, self.friction_coeffs, self.restitution_coeffs, self.stage_buf)
+            hand_contact_forces, foot_contact_forces, self.stage_buf)
 
         # return extra
         self.extras['costs'] = self.cost_buf.clone()
@@ -775,70 +704,46 @@ class Env(VecTask):
         self.extras['next_obs'] = self.obs_buf.clone()
         self.extras['next_states'] = self.states_buf.clone()
         self.extras['dones'] = self.reset_buf.clone()
+        self.extras['fail_reasons'] = self.fail_reason_buf.clone()
 
         # reset
         env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
         if len(env_ids) > 0: self.reset_idx(env_ids)
 
-    def randomize(self, env_ids=None):
-        if self.common_step_counter % self.rand_period_gravity == 0:
-            self.randomizeGravity()
-
-        if env_ids is not None:
-            self.randomizeMotorStrength(env_ids)
-            self.randomizeMotorOffsets(env_ids)
-        else:
-            env_ids = (self.progress_buf % self.rand_period_motor_strength == 0).nonzero(as_tuple=False).flatten()
-            if len(env_ids) > 0:
-                self.randomizeMotorStrength(env_ids)
-
-    def randomizeMotorStrength(self, env_ids):
-        self.motor_strengths[env_ids] = torch_utils.torch_rand_float(
-            self.rand_range_motor_strength[0], self.rand_range_motor_strength[1], (len(env_ids), 1), device=self.device)
-
-    def randomizeMotorOffsets(self, env_ids):
-        self.motor_offsets[env_ids] = torch_utils.torch_rand_float(
-            self.rand_range_motor_offset[0], self.rand_range_motor_offset[1], (len(env_ids), self.num_dofs), device=self.device)
-
-    def randomizeGravity(self):
-        sim_params = self.gym.get_sim_params(self.sim)
-        gravity_noise = np.random.rand(3)*(self.rand_range_gravity[1] - self.rand_range_gravity[0]) + self.rand_range_gravity[0]
-        gravity = np.array(self.cfg["sim"]["gravity"]) + gravity_noise
-        self.gravity[:] = torch.tensor(gravity, dtype=torch.float32, device=self.device)
-        sim_params.gravity = gymapi.Vec3(gravity[0], gravity[1], gravity[2])
-        self.gym.set_sim_params(self.sim, sim_params)
-
 @torch.jit.script
 def jit_compute_states(
     base_quaternions, base_lin_vels, base_ang_vels, base_positions, 
-    foot_contact_forces, calf_contact_forces, gravity, friction_coeffs, restitution_coeffs, stages,
+    hand_contact_forces, foot_contact_forces, stages,
 ):
     bb_lin_vels = torch_utils.quat_rotate_inverse(base_quaternions, base_lin_vels)
     bb_ang_vels = torch_utils.quat_rotate_inverse(base_quaternions, base_ang_vels)
     com_height = base_positions[:, 2:3]
-    foot_contacts = ((torch.norm(foot_contact_forces, dim=2) > 1.0) \
-                    | (torch.norm(calf_contact_forces, dim=2) > 1.0)).type(torch.float)
-    gravities = gravity.unsqueeze(0).repeat(base_quaternions.shape[0], 1)
+    hand_contacts = (torch.norm(hand_contact_forces, dim=2) > 1.0).type(torch.float)
+    foot_contacts = (torch.norm(foot_contact_forces, dim=2) > 1.0).type(torch.float)
     states = torch.cat([
-        bb_lin_vels, bb_ang_vels, com_height, foot_contacts, 
-        gravities, friction_coeffs, restitution_coeffs, stages], dim=-1)
+        bb_lin_vels, bb_ang_vels, com_height, hand_contacts, foot_contacts, stages], dim=-1)
     return states
 
 @torch.jit.script
 def jit_compute_observations(
-    body_orns, dof_pos, dof_vel, 
-    prev_actions, commands,
+    base_quat, world_z, dof_pos, dof_vel, 
+    prev_actions, world_time, gait_freq, command,
 ):
     obs_list = []
     # body orientation
-    obs_list.append(body_orns)
+    obs_list.append(torch_utils.quat_rotate_inverse(base_quat, world_z)) # 3
     # DoF's position and velocity
-    obs_list.append(dof_pos)
-    obs_list.append(dof_vel)
+    obs_list.append(dof_pos) # 19
+    obs_list.append(dof_vel) # 19
     # previous actions
-    obs_list.append(prev_actions)
+    obs_list.append(prev_actions) # 19
+    # central phase
+    obs_list.append(torch.cos(2.0*np.pi*gait_freq*world_time.unsqueeze(dim=-1)))
+    obs_list.append(torch.sin(2.0*np.pi*gait_freq*world_time.unsqueeze(dim=-1)))
+    obs_list.append(torch.cos(2.0*np.pi*gait_freq*world_time.unsqueeze(dim=-1) + np.pi))
+    obs_list.append(torch.sin(2.0*np.pi*gait_freq*world_time.unsqueeze(dim=-1) + np.pi))
     # command
-    obs_list.append(commands)
+    obs_list.append(command) # 3
     # concatenate
-    obs = torch.cat(obs_list, dim=-1)
+    obs = torch.cat(obs_list, dim=-1) # 3 + 19*3 + 4 + 3
     return obs
