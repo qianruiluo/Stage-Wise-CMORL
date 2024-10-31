@@ -18,6 +18,7 @@ import argparse
 import torch
 import wandb
 import time
+from datetime import datetime
 import glob
 
 def getParser():
@@ -91,7 +92,7 @@ def train(args, task_cfg, algo_cfg):
     teacher_args.algo_name = algo_cfg['teacher']['algo_name']
     teacher_args.model_num = algo_cfg['teacher']['model_num']
     teacher_args.name = f"{(teacher_args.task_name.lower())}_{(teacher_args.algo_name.lower())}"
-    teacher_args.save_dir = f"results/{teacher_args.name}/seed_{teacher_args.seed}"
+    teacher_args.save_dir = f"results/{teacher_args.name}/seed_{args.seed}_Oct23_19-32-25"
     backup_file_name = glob.glob(f"{teacher_args.save_dir}/backup/algo/*.yaml")[0]
     with open(backup_file_name, 'r') as f:
         teacher_algo_cfg = YAML().load(f)
@@ -109,7 +110,7 @@ def train(args, task_cfg, algo_cfg):
         if args.comment is not None:
             wandb.run.name = f"{args.name}/{args.comment}"
         else:
-            wandb.run.name = f"{args.name}"
+            wandb.run.name = f"{args.name}" + "_student_" + datetime.now().strftime("%b%d_%H-%M-%S")
 
     # slackbot
     if args.slack:
@@ -233,15 +234,7 @@ def train(args, task_cfg, algo_cfg):
                     for cost_idx, cost_name in enumerate(args.cost_names):
                         logger.write(f"{log_name}_{cost_name}", [args.n_steps, train_results[log_name][cost_idx]])
 
-        # calculate FPS
-        end_time = time.time()
-        fps = args.n_steps/(end_time - start_time)
-        if 'fps' in logger.log_name_list:
-            logger.write('fps', [args.n_steps, fps])
-
-    # final save
-    agent.save(total_step)
-    logger.save()
+        # calculate FPSaction_bound_min
 
     # terminate
     vec_env.close()
@@ -300,6 +293,7 @@ def test(args, task_cfg, algo_cfg):
             with torch.no_grad():
                 # actions_tensor = agent.getAction(obs_tensor, False)
                 actions_tensor = agent.getAction(obs_tensor, True)
+                # print("actions: ", actions_tensor)
                 obs_tensor, states_tensor, rewards_tensor, dones_tensor, infos = vec_env.step(actions_tensor)
                 reward_sums_tensor += rewards_tensor
                 cost_sums_tensor += infos['costs']
@@ -329,7 +323,9 @@ if __name__ == "__main__":
     args.algo_name = algo_cfg['name']
     args.name = f"{(args.task_name.lower())}_{(args.algo_name.lower())}"
     # save_dir
-    args.save_dir = f"results/{args.name}/seed_{args.seed}"
+    args.save_dir = f"results/{args.name}/seed_{args.seed}_student_" + datetime.now().strftime("%b%d_%H-%M-%S")
+    # args.save_dir = f"results/{args.name}/seed_{args.seed}_student_Oct24_11-04-12"
+    
     # device
     if torch.cuda.is_available() and args.device_type == 'gpu':
         device_name = f'cuda:{args.gpu_idx}'

@@ -58,8 +58,8 @@ model:
             shape: [256, 128, 64]
             activation: ELU
         use_action_bound: false
-        log_std_init: -0.8
-        log_std_fix: true
+        log_std_init: -0.0
+        log_std_fix: false
     reward_critic:
         mlp:
             shape: [256, 128, 64]

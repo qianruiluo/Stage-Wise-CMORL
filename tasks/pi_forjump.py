@@ -126,6 +126,8 @@ class Env(VecTask):
         self.start_time_buf = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
         self.cmd_time_buf = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
         self.land_time_buf = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
+        self.init_phase_buf = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
+        
 
         # get gym state tensors
         """
@@ -191,6 +193,9 @@ class Env(VecTask):
             name = self.dof_names[i]
             self.default_dof_positions[:, i] = self.named_default_joint_positions[name]
             self.sit_dof_positions[:, i] = self.named_sit_joint_positions[name]
+            
+        self.foot_lift = torch.zeros((self.num_envs, 2), dtype=torch.float, device=self.device)
+        
 
         # for inner variables
         self.world_x = torch.zeros(
@@ -204,7 +209,7 @@ class Env(VecTask):
         self.world_x[:, 0] = 1.0
         self.world_y[:, 1] = 1.0
         self.world_z[:, 2] = 1.0
-        self.robot_up[:, 2] = 0.33
+        self.robot_up[:, 2] = 0.3
         self.joint_targets = torch.zeros(
             (self.num_envs, self.num_dofs), 
             dtype=torch.float32, device=self.device, requires_grad=False)
@@ -344,6 +349,9 @@ class Env(VecTask):
             self.gym.enable_actor_dof_force_sensors(env_handle, robot_handle)
             self.robot_handles.append(robot_handle)
             self.env_handles.append(env_handle)
+            
+        dof_props = self.gym.get_asset_dof_properties(robot_asset)
+        print("drivemode: ", dof_props['driveMode'])
 
         # find link & joint names.
         base_names = ['base_link']     # 1
@@ -354,7 +362,7 @@ class Env(VecTask):
         thigh_names = [s for s in self.link_names if 'thigh' in s or "hip_roll" in s]  # 2
         calf_names = [s for s in self.link_names if 'calf' in s]    # 2
         foot_names = [s for s in self.link_names if 'ankle_roll' in s]   # 2
-        terminate_touch_names = base_names
+        terminate_touch_names = base_names + hip_names + thigh_names
         undesired_touch_names = torso_names + hip_names + thigh_names + calf_names
         
         # print("link names:", self.link_names)
@@ -444,6 +452,7 @@ class Env(VecTask):
 
         # reset buffers
         self.progress_buf[env_ids] = 0
+        self.init_phase_buf[env_ids] = torch_utils.torch_rand_float(0.0, 1.0, (len(env_ids), 1), device=self.device).squeeze()
         self.reset_buf[env_ids] = 0
         self.fail_buf[env_ids] = 0
         self.stage_buf[env_ids] = 0.0
@@ -471,7 +480,7 @@ class Env(VecTask):
         obs = jit_compute_observations(
             self.base_quaternions[env_ids], self.world_z[env_ids], 
             self.dof_positions[env_ids], self.dof_velocities[env_ids], 
-            self.prev_actions[env_ids], self.progress_buf[env_ids]*self.control_dt, self.gait_freq, commands)
+            self.prev_actions[env_ids], self.progress_buf[env_ids]*self.control_dt + self.init_phase_buf[env_ids] / self.gait_freq, self.gait_freq, commands)
         for history_idx in range(self.history_len):
             self.obs_buf[env_ids, history_idx*self.raw_obs_dim:(history_idx+1)*self.raw_obs_dim] = obs
 
@@ -509,7 +518,7 @@ class Env(VecTask):
         self.gym.refresh_rigid_body_state_tensor(self.sim)
         self.progress_buf += 1
 
-        # stage 0: stand, stage 1: down, stage 2: jump, stage 3: air, stage 4: land
+        # stage 0: stand, stage 1: down, stage 2: jump, stage 3: back turn, stage 4: land
         # =================== calculate rewards =================== #
         # com height
         jump_pos = self.base_positions + torch_utils.quat_rotate(self.base_quaternions, self.robot_up)
@@ -520,25 +529,29 @@ class Env(VecTask):
         
         self.rew_buf[:, 0]  = self.stage_buf[:, 0]*(-torch.abs(com_height - 0.34))
         self.rew_buf[:, 0] += self.stage_buf[:, 1]*(-torch.abs(com_height - 0.24))
-        self.rew_buf[:, 0] += self.stage_buf[:, 2]*(-torch.abs(com_height - 0.34))
-        self.rew_buf[:, 0] += self.stage_buf[:, 3]*(jump_height <= 0.6)*(jump_height)
+        self.rew_buf[:, 0] += self.stage_buf[:, 2]*(jump_height <= 1.2)*(jump_height)
+        self.rew_buf[:, 0] += self.stage_buf[:, 3]*(jump_height <= 1.2)*(jump_height)
+        # self.rew_buf[:, 0] += self.stage_buf[:, 2]*(-10.0*torch.square(com_height - 0.5))
+        # self.rew_buf[:, 0] += self.stage_buf[:, 3]*(-10.0*torch.square(com_height - 0.5))
         self.rew_buf[:, 0] += self.stage_buf[:, 4]*(-torch.abs(com_height - 0.34))
         # body balance
         body_z = torch_utils.quat_rotate_inverse(self.base_quaternions, self.world_z)
         # print("body_z:", torch.mean(-torch.arccos(body_z[:, 2])))
         self.rew_buf[:, 1] =  self.stage_buf[:, 0]*(-torch.arccos(torch.clamp(body_z[:, 2], -1.0, 1.0)))
         self.rew_buf[:, 1] += self.stage_buf[:, 1]*(-torch.arccos(torch.clamp(body_z[:, 2], -1.0, 1.0)))
-        self.rew_buf[:, 1] += self.stage_buf[:, 2]*(-torch.arccos(torch.clamp(body_z[:, 2], -1.0, 1.0)))
-        self.rew_buf[:, 1] += self.stage_buf[:, 3]*(-torch.arccos(torch.clamp(body_z[:, 2], -1.0, 1.0)))
+        self.rew_buf[:, 1] += self.stage_buf[:, 2]*(-torch.abs(torch.arccos(torch.clamp(body_z[:, 1], -1.0, 1.0)) - np.pi/2.0))
+        self.rew_buf[:, 1] += self.stage_buf[:, 3]*(-torch.abs(torch.arccos(torch.clamp(body_z[:, 1], -1.0, 1.0)) - np.pi/2.0))
         self.rew_buf[:, 1] += self.stage_buf[:, 4]*(-torch.arccos(torch.clamp(body_z[:, 2], -1.0, 1.0)))
         # pitch vel
         base_lin_vels = torch_utils.quat_rotate_inverse(self.base_quaternions, self.base_lin_vels)
+        # print("base lin vels:", base_lin_vels)
         base_ang_vels = torch_utils.quat_rotate_inverse(self.base_quaternions, self.base_ang_vels)
         base_vel_penalties = torch.square(base_lin_vels[:, 0]) + torch.square(base_lin_vels[:, 1]) + torch.square(base_ang_vels[:, 2])
         self.rew_buf[:, 2]  = self.stage_buf[:, 0]*(-base_vel_penalties)
         self.rew_buf[:, 2] += self.stage_buf[:, 1]*(-base_vel_penalties)
-        self.rew_buf[:, 2] += self.stage_buf[:, 2]*(-base_vel_penalties + 2.0 * torch.square(base_lin_vels[:, 0]))
-        self.rew_buf[:, 2] += self.stage_buf[:, 3]*(-base_vel_penalties + 5.0 * torch.square(base_lin_vels[:, 0]))
+        self.rew_buf[:, 2] += self.stage_buf[:, 2]*((1.0 - self.is_one_turn_buf)*(-base_ang_vels[:, 1]) + 10.0 * base_lin_vels[:, 2] \
+            - torch.abs(base_ang_vels[:, 0]) - torch.abs(base_ang_vels[:, 2]))
+        self.rew_buf[:, 2] += self.stage_buf[:, 3]*(1.0 - self.is_one_turn_buf)*(-base_ang_vels[:, 1])
         self.rew_buf[:, 2] += self.stage_buf[:, 4]*(-base_vel_penalties)
         # energy
         self.rew_buf[:, 3] = -torch.square(self.dof_torques).mean(dim=-1)
@@ -549,28 +562,44 @@ class Env(VecTask):
         self.rew_buf[:, 4] += self.stage_buf[:, 3]*(-torch.square(self.dof_positions - self.sit_dof_positions).mean(dim=-1))
         self.rew_buf[:, 4] += self.stage_buf[:, 4]*(-torch.square(self.dof_positions - self.default_dof_positions).mean(dim=-1))
         
+        # foot contact
+        foot_contact_threshold = 0.5
+        foot_contact_forces = self.contact_forces[:, self.foot_indices, :]
+        hand_contact_forces = self.contact_forces[:, self.hand_indices, :]
+        foot_contact = (torch.norm(foot_contact_forces, dim=2) > 15).type(torch.float)
+        # print("foot contact force: ", torch.norm(foot_contact_forces, dim=2))
+        left_phase = (self.obs_buf[:, -6] <= 0).to(torch.float)
+        right_phase = (self.obs_buf[:, -4] <= 0).to(torch.float)
+        # print("foot_contact:", foot_contact[0], foot_contact.mean(dim=-1))
+        # print("phase:", left_phase[0], right_phase[0])
+        
+        # foot lift
+        lift_ratio = 0.5
+        self.foot_lift[:, 0] = -torch.abs(self.dof_positions[:, 6] - 0.6 * lift_ratio * left_phase * self.obs_buf[:, -4] * (self.sit_dof_positions[:, 6] - self.default_dof_positions[:, 6]))
+        self.foot_lift[:, 0] += -torch.abs(self.dof_positions[:, 9] - lift_ratio * left_phase * self.obs_buf[:, -4] * (self.sit_dof_positions[:, 9] - self.default_dof_positions[:, 9]))
+        self.foot_lift[:, 0] += -torch.abs(self.dof_positions[:, 10] - lift_ratio * left_phase * self.obs_buf[:, -4] * (self.sit_dof_positions[:, 10] - self.default_dof_positions[:, 10]))
+        
+        self.foot_lift[:, 1] = -torch.abs(self.dof_positions[:, 0] - 0.6 * lift_ratio * right_phase * self.obs_buf[:, -6] * (self.sit_dof_positions[:, 0] - self.default_dof_positions[:, 0]))
+        self.foot_lift[:, 1] += -torch.abs(self.dof_positions[:, 3] - lift_ratio * right_phase * self.obs_buf[:, -6] * (self.sit_dof_positions[:, 3] - self.default_dof_positions[:, 3]))
+        self.foot_lift[:, 1] += -torch.abs(self.dof_positions[:, 4] - lift_ratio * right_phase * self.obs_buf[:, -6] * (self.sit_dof_positions[:, 4] - self.default_dof_positions[:, 4]))
+        # print("foot lift: ", self.foot_lift[0, :], "style rew: ", self.rew_buf[0, 4])
+        self.rew_buf[:, 4] += 0.1 * self.stage_buf[:, 0]*(self.foot_lift[:, 0] + self.foot_lift[:, 1])
+        
         for i in range(0, 5):
             self.rew_buf[:, i] = self.rew_buf[:, i] * self.reward_scales[i]
         # ========================================================= #
         # ==================== calculate costs ==================== #
         # foot contact
-        foot_contact_threshold = 0.5
-        foot_contact_forces = self.contact_forces[:, self.foot_indices, :]
-        hand_contact_forces = self.contact_forces[:, self.hand_indices, :]
-        foot_contact = (torch.norm(foot_contact_forces, dim=2) > 1.0).type(torch.float)
-        left_phase = (self.obs_buf[:, -6] <= 0).to(torch.float)
-        right_phase = (self.obs_buf[:, -4] <= 0).to(torch.float)
-        # print("foot_contact:", foot_contact[0], foot_contact.mean(dim=-1))
+        
         
         foot_contact_cost  = left_phase*(1.0 - foot_contact[:, 0]) + (1.0 - left_phase)*foot_contact[:, 0]
         foot_contact_cost += right_phase*(1.0 - foot_contact[:, 1]) + (1.0 - right_phase)*foot_contact[:, 1]
         foot_contact_cost /= 2.0
         self.cost_buf[:, 0]  = self.stage_buf[:, 0]*foot_contact_cost
-        # self.cost_buf[:, 0]  = self.stage_buf[:, 0]*(foot_contact.mean(dim=-1) < 1.0)
         self.cost_buf[:, 0] += self.stage_buf[:, 1]*(foot_contact.mean(dim=-1) < 1.0)
-        self.cost_buf[:, 0] += self.stage_buf[:, 2]*(foot_contact.mean(dim=-1) < 1.0)
+        self.cost_buf[:, 0] += self.stage_buf[:, 2]*(foot_contact.mean(dim=-1) < 1.0)*(3.0 - base_lin_vels[:, 2])
         self.cost_buf[:, 0] += self.stage_buf[:, 3]*(foot_contact.mean(dim=-1) > 0.1)
-        self.cost_buf[:, 0] += self.stage_buf[:, 4]*foot_contact.mean(dim=-1)
+        self.cost_buf[:, 0] += self.stage_buf[:, 4]*foot_contact_threshold
         # body contact
         term_contact = torch.any(torch.norm(self.contact_forces[:, self.terminate_touch_indices, :], dim=-1) > 1.0, dim=-1)
         undesired_contact = torch.any(torch.norm(self.contact_forces[:, self.undesired_touch_indices, :], dim=-1) > 1.0, dim=-1)
@@ -592,6 +621,8 @@ class Env(VecTask):
         self.cost_buf[:, 4] = torch.mean(
             (torch.abs(self.dof_torques) > self.dof_torques_upper_limits) \
                 * torch.square((torch.abs(self.dof_torques) - self.dof_torques_upper_limits)), dim=-1)
+        if torch.any(self.dof_torques[0] > 19.0):
+            print("torque: ", self.dof_torques[0])
         
         for i in range(0, 5):
             self.cost_buf[:, i] = self.cost_buf[:, i] * self.cost_scales[i]
@@ -601,18 +632,21 @@ class Env(VecTask):
         # update stage
         # have to handle in the following order: N -> N-1 -> N-2 ... -> 1 -> 0.
         from4_to0 = torch.logical_and(self.stage_buf[:, 4] == 1.0, 
-            self.progress_buf*self.control_dt > self.land_time_buf + 1.0).type(torch.float32)
+            self.progress_buf*self.control_dt > self.land_time_buf + 0.4).type(torch.float32)
         self.stage_buf[:, 4] = (1.0 - from4_to0)*self.stage_buf[:, 4]
         self.stage_buf[:, 0] = from4_to0 + (1.0 - from4_to0)*self.stage_buf[:, 0]
         from3_to4 = torch.logical_and(
-            self.stage_buf[:, 3] == 1.0, foot_contact.mean(dim=-1) > 0.0
+            self.stage_buf[:, 3] == 1.0, torch.logical_and(
+                foot_contact.mean(dim=-1) > 0.0,
+                self.is_half_turn_buf
+            )
         ).type(torch.float32)
         self.stage_buf[:, 3] = (1.0 - from3_to4)*self.stage_buf[:, 3]
         self.stage_buf[:, 4] = from3_to4 + (1.0 - from3_to4)*self.stage_buf[:, 4]
         from2_to3 = torch.logical_and(
             self.stage_buf[:, 2] == 1.0, torch.logical_and(
                 foot_contact.mean(dim=-1) < 0.1,
-                torch.logical_and(com_height >= 0.36, jump_height > 0.08))).type(torch.float32)
+                com_height >= 0.3)).type(torch.float32)
         self.stage_buf[:, 2] = (1.0 - from2_to3)*self.stage_buf[:, 2]
         self.stage_buf[:, 3] = from2_to3 + (1.0 - from2_to3)*self.stage_buf[:, 3]
         from1_to2 = torch.logical_and(
@@ -643,7 +677,7 @@ class Env(VecTask):
 
         # check termination
         body_contacts = torch.any(torch.norm(self.contact_forces[:, self.terminate_touch_indices, :], dim=-1) > 1.0, dim=-1)
-        landing_wo_turns = torch.logical_and(self.stage_buf[:, 3] == 1.0, torch.logical_and(foot_contact.mean(dim=-1) > 0.0, self.is_half_turn_buf))
+        landing_wo_turns = torch.logical_and(self.stage_buf[:, 3] == 1.0, torch.logical_and(foot_contact.mean(dim=-1) > 0.0, 1 - self.is_half_turn_buf))
         body_balances = torch.logical_and(self.stage_buf[:, 0] + self.stage_buf[:, 1] + self.stage_buf[:, 2] >= 1.0, body_z[:, 2] < 0.4)
         self.fail_buf[:] = torch.logical_or(body_contacts, torch.logical_or(landing_wo_turns, body_balances)).type(torch.long)
         
@@ -655,7 +689,7 @@ class Env(VecTask):
             if self.fail_reason_buf[0, 0]:
                 print("env 0 fail: body contact")
             if self.fail_reason_buf[0, 1]:
-                print("env 0 fail: landing_with_turn")
+                print("env 0 fail: landing_wo_turn")
             if self.fail_reason_buf[0, 2]:
                 print("env 0 fail: body balance")
         
@@ -679,8 +713,7 @@ class Env(VecTask):
         obs = jit_compute_observations(
             self.base_quaternions, self.world_z, 
             self.dof_positions, self.dof_velocities, 
-            self.prev_actions, self.progress_buf*self.control_dt, self.gait_freq, commands)
-        self.obs_buf[:, :-self.raw_obs_dim] = self.obs_buf[:, self.raw_obs_dim:].clone()
+            self.prev_actions, self.progress_buf*self.control_dt + self., )bs_dim:].clone()
         self.obs_buf[:, -self.raw_obs_dim:] = obs
 
         # update state buffer
@@ -723,10 +756,11 @@ def jit_compute_observations(
     # body orientation
     obs_list.append(torch_utils.quat_rotate_inverse(base_quat, world_z)) # 3
     # DoF's position and velocity
-    obs_list.append(dof_pos) # 19
-    obs_list.append(dof_vel) # 19
+    
+    obs_list.append(dof_pos) # 12
+    obs_list.append(dof_vel) # 12
     # previous actions
-    obs_list.append(prev_actions) # 19
+    obs_list.append(prev_actions) # 12
     # central phase
     obs_list.append(torch.cos(2.0*np.pi*gait_freq*world_time.unsqueeze(dim=-1)))
     obs_list.append(torch.sin(2.0*np.pi*gait_freq*world_time.unsqueeze(dim=-1)))
@@ -735,5 +769,5 @@ def jit_compute_observations(
     # command
     obs_list.append(command) # 3
     # concatenate
-    obs = torch.cat(obs_list, dim=-1) # 3 + 19*3 + 4 + 3
+    obs = torch.cat(obs_list, dim=-1) # 3 + 12*3 + 4 + 3
     return obs

@@ -61,4 +61,6 @@ python main_teacher.py --task_cfg_path tasks/pi_backflip.yaml --algo_cfg_path al
 ### Student Learning
 
 - training: `python main_student.py --task_cfg_path tasks/{task_name}.yaml --algo_cfg_path algos/student/{task_name}.yaml --wandb --seed 1`
+python main_student.py --task_cfg_path tasks/pi_backflip.yaml --algo_cfg_path algos/student/pi_backflip.yaml --wandb --render --seed 1 
 - test: `python main_student.py --task_cfg_path tasks/{task_name}.yaml --algo_cfg_path algos/student/{task_name}.yaml --test --render --seed 1 --model_num {saved_model_num}`
+python main_student.py --task_cfg_path tasks/pi_backflip.yaml --algo_cfg_path algos/student/pi_backflip.yaml --test --render --seed 1 --model_num {saved_model_num}

@@ -44,8 +44,8 @@ env:
 
     reward_names: [com_pos, body_balance, vel, energy, style]
     cost_names: [foot_contact, body_contact, joint_pos, joint_vel, joint_torque]
-    reward_scales: [10.0, 2, 0.1, 0.005, 1.0]
-    cost_scales: [1.0, 0.1, 0.4, 10, 20]
+    reward_scales: [10.0, 10, 0.05, 0.05, 20.0]
+    cost_scales: [0.5, 0.1, 0.02, 10, 5]
     # reward_scales: [10.0, 10, 0.01, 0.05, 1.0]
     # cost_scales: [0.5, 0.1, 0.02, 10, 10]
     stage_names: [stand, sit, jump, air, land]
@@ -92,42 +92,43 @@ env:
     control:
         # reference: https://github.com/carlosferrazza/humanoid-bench/blob/main/humanoid_bench/assets/robots/h1_pos.xml
         stiffness:                      # P gain [N*m/rad]
-            l_hip_pitch_joint: 80.0
-            l_hip_roll_joint: 80.0
-            l_thigh_joint: 80.0
-            l_calf_joint: 80.0
-            l_ankle_pitch_joint: 80.0
-            l_ankle_roll_joint: 80.0
-            r_hip_pitch_joint: 80.0
-            r_hip_roll_joint: 80.0
-            r_thigh_joint: 80.0
-            r_calf_joint: 80.0
-            r_ankle_pitch_joint: 80.0
-            r_ankle_roll_joint: 80.0
+            l_hip_pitch_joint: 40.0
+            l_hip_roll_joint: 40.0
+            l_thigh_joint: 40.0
+            l_calf_joint: 40.0
+            l_ankle_pitch_joint: 40.0
+            l_ankle_roll_joint: 40.0
+            r_hip_pitch_joint: 40.0
+            r_hip_roll_joint: 40.0
+            r_thigh_joint: 40.0
+            r_calf_joint: 40.0
+            r_ankle_pitch_joint: 40.0
+            r_ankle_roll_joint: 40.0
         damping:                        # D gain [N*m*s/rad]
-            l_hip_pitch_joint: 0.25
-            l_hip_roll_joint: 0.25
-            l_thigh_joint: 0.25
-            l_calf_joint: 0.25
-            l_ankle_pitch_joint: 0.25
-            l_ankle_roll_joint: 0.25
-            r_hip_pitch_joint: 0.25
-            r_hip_roll_joint: 0.25
-            r_thigh_joint: 0.25
-            r_calf_joint: 0.25
-            r_ankle_pitch_joint: 0.25
-            r_ankle_roll_joint: 0.25
+            l_hip_pitch_joint: 0.6
+            l_hip_roll_joint: 0.6
+            l_thigh_joint: 0.6
+            l_calf_joint: 0.6
+            l_ankle_pitch_joint: 0.6
+            l_ankle_roll_joint: 0.6
+            r_hip_pitch_joint: 0.6
+            r_hip_roll_joint: 0.6
+            r_thigh_joint: 0.6
+            r_calf_joint: 0.6
+            r_ankle_pitch_joint: 0.6
+            r_ankle_roll_joint: 0.6
         action_scale: 0.2 # target angle = actionScale * action + defaultAngle
-        action_smooth_weight: 0.3 # 1.0: no smoothing, 0.0: max smoothing
+        action_smooth_weight: 0.5 # 1.0: no smoothing, 0.0: max smoothing
         
 
     learn:
     #TODO change to fit pi robot!
-        episode_length_s: 10.0   # [s]
-        gait_frequency: 1        # [Hz]
+        episode_length_s: 8.0   # [s]
+        gait_frequency: 3.3        # [Hz]
         ########################
         # for constraint
         joint_pos_limit:
+
             upper: [
                 1.75, 0.12, 0.3, 1.65, 1.3, 0.15, 
                 1.75, 0.5, 0.6, 1.65, 1.3, 0.15,
