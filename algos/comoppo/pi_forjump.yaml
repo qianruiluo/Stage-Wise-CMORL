@@ -38,7 +38,7 @@ backup_files: [
     algos/comoppo/critic.py,
     algos/comoppo/normalizer.py,
     algos/comoppo/storage.py,
-    algos/comoppo/pi_backflip.yaml,
+    algos/comoppo/pi_forjump.yaml,
 ]
 
 # for logging

@@ -5,6 +5,8 @@ from .go1_twohand import Env as Go1Twohand
 from .h1_backflip import Env as H1Backflip
 from .h1_twohand import Env as H1Twohand
 from .pi_backflip import Env as PiBackflip
+from .pi_forjump import Env as PiForjump
+
 
 task_dict = {
     'Go1Backflip': Go1Backflip,
@@ -13,5 +15,7 @@ task_dict = {
     'Go1Twohand': Go1Twohand,
     'H1Backflip': H1Backflip,
     'H1Twohand': H1Twohand,
-    'PiBackflip': PiBackflip
+    'PiBackflip': PiBackflip,
+    'PiForjump': PiForjump
+    
 }

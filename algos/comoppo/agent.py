@@ -200,6 +200,7 @@ class Agent(AgentBase):
             sym_constraint = sym_constraints.mean()
             if self.is_sym_con and sym_constraint > self.sym_con_threshold:
                 actor_loss += self.con_coeff*sym_constraint
+                
             # ======================================= #
             self.actor_optimizer.zero_grad()
             actor_loss.backward()

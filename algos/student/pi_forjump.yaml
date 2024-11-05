@@ -20,7 +20,7 @@ backup_files: [
     algos/student/agent.py,
     algos/student/normalizer.py,
     algos/student/storage.py,
-    algos/student/pi_backflip.yaml,
+    algos/student/pi_forjump.yaml,
 ]
 
 # for logging

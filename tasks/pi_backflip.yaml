@@ -44,8 +44,8 @@ env:
 
     reward_names: [com_pos, body_balance, vel, energy, style]
     cost_names: [foot_contact, body_contact, joint_pos, joint_vel, joint_torque]
-    reward_scales: [10.0, 10, 0.03, 0.005, 4.0]
-    cost_scales: [0.5, 0.1, 0.02, 10, 5]
+    reward_scales: [10.0, 10.0, 0.06, 0.02, 8.0]
+    cost_scales: [1.0, 0.1, 0.2, 10, 5]
     # reward_scales: [10.0, 10, 0.01, 0.05, 1.0]
     # cost_scales: [0.5, 0.1, 0.02, 10, 10]
     stage_names: [stand, sit, jump, air, land]
@@ -75,7 +75,16 @@ env:
         r_thigh_joint: 0.0              # [rad]
         r_calf_joint: 1.0               # [rad]
         r_ankle_pitch_joint: -0.4        # [rad]
-        r_ankle_roll_joint: 0.0         # [rad]
+        r_ankle_roll_joint: 0.0         # [rad]raw_obs_sym_mat = torch.eye(self.raw_obs_dim, device=self.device, dtype=torch.float32, requires_grad=False)
+        # raw_obs_sym_mat[1, 1] = -1.0
+        # for i in range(3):
+        #     raw_obs_sym_mat[(3+self.num_dofs*(i)):(3+self.num_dofs*(i+1)), (3+self.num_dofs*(i)):(3+self.num_dofs*(i+1))] = self.joint_sym_mat.clone()
+        # raw_obs_sym_mat[3+3*self.num_dofs:7+3*self.num_dofs, 3+3*self.num_dofs:7+3*self.num_dofs] = 0.0
+        # raw_obs_sym_mat[3+3*self.num_dofs:5+3*self.num_dofs, 5+3*self.num_dofs:7+3*self.num_dofs] = torch.eye(2, device=self.device, dtype=torch.float32)
+        # raw_obs_sym_mat[5+3*self.num_dofs:7+3*self.num_dofs, 3+3*self.num_dofs:5+3*self.num_dofs] = torch.eye(2, device=self.device, dtype=torch.float32)
+        # raw_obs_sym_mat[7+3*self.num_dofs:, 7+3*self.num_dofs:] = torch.eye(3, device=self.device, dtype=torch.float32)        
+        # for i in range(self.history_len):
+        #     self.obs_sym_mat[(self.raw_obs_dim*i):(self.raw_obs_dim*(i+1)), (self.raw_obs_dim*i):(self.raw_obs_dim*(i+1))] = raw_obs_sym_mat.clone()
         l_hip_pitch_joint: -1.0          # [rad]
         l_hip_roll_joint: 0.0           # [rad]
         l_thigh_joint: 0.0              # [rad]
@@ -117,7 +126,7 @@ env:
             r_calf_joint: 0.5
             r_ankle_pitch_joint: 0.5
             r_ankle_roll_joint: 0.5
-        action_scale: 0.2 # target angle = actionScale * action + defaultAngle
+        action_scale: 0.1 # target angle = actionScale * action + defaultAngle
         action_smooth_weight: 1.0 # 1.0: no smoothing, 0.0: max smoothing
         
 

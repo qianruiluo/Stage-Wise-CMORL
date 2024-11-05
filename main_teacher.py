@@ -339,7 +339,7 @@ if __name__ == "__main__":
     args.name = f"{(args.task_name.lower())}_{(args.algo_name.lower())}"
     # save_dir
     # args.save_dir = f"results/{args.name}/seed_{args.seed}_" + datetime.now().strftime("%b%d_%H-%M-%S") # for training
-    args.save_dir = f"results/{args.name}/seed_{args.seed}_Oct30_12-11-22" # for testing
+    args.save_dir = f"results/{args.name}/seed_{args.seed}_Nov01_18-11-05" # for testing
     
     # args.save_dir = f"results/{args.name}/seed_{args.seed}"
     

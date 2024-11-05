@@ -55,7 +55,7 @@ class Env(VecTask):
             linear vel (3), angular vel (3), com height (1), hand/foot contact (4), stage (5)
         """
         self.cfg = cfg
-        self.raw_obs_dim = 3 + 12*3 + 4 + 3
+        self.raw_obs_dim = 3 + 12*2 + 4 + 3
         self.history_len = self.cfg["env"]["history_len"]
         self.cfg['env']['numObservations'] = self.raw_obs_dim * self.history_len
         self.cfg['env']['numStates'] = 3 + 3 + 1 + 2 + 5 
@@ -244,16 +244,16 @@ class Env(VecTask):
 
         
         self.obs_sym_mat = torch.zeros((self.num_obs, self.num_obs), device=self.device, dtype=torch.float32, requires_grad=False)
-        raw_obs_sym_mat = torch.eye(self.raw_obs_dim, device=self.device, dtype=torch.float32, requires_grad=False)
-        raw_obs_sym_mat[1, 1] = -1.0
-        for i in range(3):
-            raw_obs_sym_mat[(3+self.num_dofs*(i)):(3+self.num_dofs*(i+1)), (3+self.num_dofs*(i)):(3+self.num_dofs*(i+1))] = self.joint_sym_mat.clone()
-        raw_obs_sym_mat[3+3*self.num_dofs:7+3*self.num_dofs, 3+3*self.num_dofs:7+3*self.num_dofs] = 0.0
-        raw_obs_sym_mat[3+3*self.num_dofs:5+3*self.num_dofs, 5+3*self.num_dofs:7+3*self.num_dofs] = torch.eye(2, device=self.device, dtype=torch.float32)
-        raw_obs_sym_mat[5+3*self.num_dofs:7+3*self.num_dofs, 3+3*self.num_dofs:5+3*self.num_dofs] = torch.eye(2, device=self.device, dtype=torch.float32)
-        raw_obs_sym_mat[7+3*self.num_dofs:, 7+3*self.num_dofs:] = torch.eye(3, device=self.device, dtype=torch.float32)        
-        for i in range(self.history_len):
-            self.obs_sym_mat[(self.raw_obs_dim*i):(self.raw_obs_dim*(i+1)), (self.raw_obs_dim*i):(self.raw_obs_dim*(i+1))] = raw_obs_sym_mat.clone()
+        # raw_obs_sym_mat = torch.eye(self.raw_obs_dim, device=self.device, dtype=torch.float32, requires_grad=False)
+        # raw_obs_sym_mat[1, 1] = -1.0
+        # for i in range(3):
+        #     raw_obs_sym_mat[(3+self.num_dofs*(i)):(3+self.num_dofs*(i+1)), (3+self.num_dofs*(i)):(3+self.num_dofs*(i+1))] = self.joint_sym_mat.clone()
+        # raw_obs_sym_mat[3+3*self.num_dofs:7+3*self.num_dofs, 3+3*self.num_dofs:7+3*self.num_dofs] = 0.0
+        # raw_obs_sym_mat[3+3*self.num_dofs:5+3*self.num_dofs, 5+3*self.num_dofs:7+3*self.num_dofs] = torch.eye(2, device=self.device, dtype=torch.float32)
+        # raw_obs_sym_mat[5+3*self.num_dofs:7+3*self.num_dofs, 3+3*self.num_dofs:5+3*self.num_dofs] = torch.eye(2, device=self.device, dtype=torch.float32)
+        # raw_obs_sym_mat[7+3*self.num_dofs:, 7+3*self.num_dofs:] = torch.eye(3, device=self.device, dtype=torch.float32)        
+        # for i in range(self.history_len):
+        #     self.obs_sym_mat[(self.raw_obs_dim*i):(self.raw_obs_dim*(i+1)), (self.raw_obs_dim*i):(self.raw_obs_dim*(i+1))] = raw_obs_sym_mat.clone()
         self.state_sym_mat = torch.eye(self.num_states - self.num_stages, device=self.device, dtype=torch.float32, requires_grad=False)
         # self.state_sym_mat[1, 1] = -1.0
         # self.state_sym_mat[3, 3] = -1.0
@@ -524,6 +524,7 @@ class Env(VecTask):
         jump_pos = self.base_positions + torch_utils.quat_rotate(self.base_quaternions, self.robot_up)
         jump_height = jump_pos[:, 2]
         com_height = self.base_positions[:, 2]
+        basepos_bias = torch.square(self.base_positions[:, 0]) + torch.square(self.base_positions[:, 1])
         # print("com_height:", torch.mean(com_height), com_height[0])
         # print("jump_height:", jump_height[0])
         
@@ -531,8 +532,8 @@ class Env(VecTask):
         
         self.rew_buf[:, 0]  = self.stage_buf[:, 0]*(-torch.abs(com_height - 0.34))
         self.rew_buf[:, 0] += self.stage_buf[:, 1]*(-torch.abs(com_height - 0.24))
-        self.rew_buf[:, 0] += self.stage_buf[:, 2]*(jump_height <= 1.2)*(jump_height)
-        self.rew_buf[:, 0] += self.stage_buf[:, 3]*(jump_height <= 1.2)*(jump_height)
+        self.rew_buf[:, 0] += self.stage_buf[:, 2]*(jump_height <= 0.9)*(jump_height)
+        self.rew_buf[:, 0] += self.stage_buf[:, 3]*(jump_height <= 0.9)*(jump_height)
         # self.rew_buf[:, 0] += self.stage_buf[:, 2]*(-10.0*torch.square(com_height - 0.5))
         # self.rew_buf[:, 0] += self.stage_buf[:, 3]*(-10.0*torch.square(com_height - 0.5))
         self.rew_buf[:, 0] += self.stage_buf[:, 4]*(-torch.abs(com_height - 0.34))
@@ -545,16 +546,30 @@ class Env(VecTask):
         self.rew_buf[:, 1] += self.stage_buf[:, 3]*(-torch.abs(torch.arccos(torch.clamp(body_z[:, 1], -1.0, 1.0)) - np.pi/2.0))
         self.rew_buf[:, 1] += self.stage_buf[:, 4]*(-torch.arccos(torch.clamp(body_z[:, 2], -1.0, 1.0)))
         # pitch vel
+        # base_lin_vels = torch_utils.quat_rotate_inverse(self.base_quaternions, self.base_lin_vels)
+        # # print("base lin vels:", base_lin_vels)
+        # base_ang_vels = torch_utils.quat_rotate_inverse(self.base_quaternions, self.base_ang_vels)
+        # base_vel_penalties = torch.abs(base_lin_vels[:, 0]) + torch.abs(base_lin_vels[:, 1]) + torch.abs(base_lin_vels[:, 2]) \
+        #     + torch.square(base_ang_vels[:, 0]) + torch.square(base_ang_vels[:, 1]) + torch.square(base_ang_vels[:, 2])
+        # self.rew_buf[:, 2]  = self.stage_buf[:, 0]*(-base_vel_penalties - basepos_bias)
+        # self.rew_buf[:, 2] += self.stage_buf[:, 1]*(-base_vel_penalties + torch.abs(base_lin_vels[:, 2]) - basepos_bias)
+        # self.rew_buf[:, 2] += self.stage_buf[:, 2]*((1.0 - self.is_one_turn_buf)*(-2.0*base_ang_vels[:, 1]) + 2.0 * base_lin_vels[:, 2] \
+        #     - torch.square(base_ang_vels[:, 0]) - torch.square(base_ang_vels[:, 2]))
+        # self.rew_buf[:, 2] += self.stage_buf[:, 3]*(1.0 - self.is_one_turn_buf)*(-10.0*base_ang_vels[:, 1])
+        # self.rew_buf[:, 2] += self.stage_buf[:, 4]*(-base_vel_penalties)
+        
         base_lin_vels = torch_utils.quat_rotate_inverse(self.base_quaternions, self.base_lin_vels)
         # print("base lin vels:", base_lin_vels)
         base_ang_vels = torch_utils.quat_rotate_inverse(self.base_quaternions, self.base_ang_vels)
         base_vel_penalties = torch.square(base_lin_vels[:, 0]) + torch.square(base_lin_vels[:, 1]) + torch.square(base_ang_vels[:, 2])
-        self.rew_buf[:, 2]  = self.stage_buf[:, 0]*(-base_vel_penalties)
-        self.rew_buf[:, 2] += self.stage_buf[:, 1]*(-base_vel_penalties)
-        self.rew_buf[:, 2] += self.stage_buf[:, 2]*((1.0 - self.is_one_turn_buf)*(-2.0*base_ang_vels[:, 1]) + 10.0 * base_lin_vels[:, 2] \
+        self.rew_buf[:, 2]  = self.stage_buf[:, 0]*(-base_vel_penalties - basepos_bias)
+        self.rew_buf[:, 2] += self.stage_buf[:, 1]*(-base_vel_penalties - basepos_bias)
+        self.rew_buf[:, 2] += self.stage_buf[:, 2]*((1.0 - self.is_one_turn_buf)*(-1.0*torch.square(base_ang_vels[:, 1] + 6.0)) + 10.0 * base_lin_vels[:, 2] \
             - torch.abs(base_ang_vels[:, 0]) - torch.abs(base_ang_vels[:, 2]))
-        self.rew_buf[:, 2] += self.stage_buf[:, 3]*(1.0 - self.is_one_turn_buf)*(-5.0*base_ang_vels[:, 1])
+        self.rew_buf[:, 2] += self.stage_buf[:, 3]*((1.0 - self.is_one_turn_buf)*(-1.0*torch.square(base_ang_vels[:, 1] + 30.0)) - 10.0 * torch.abs(base_ang_vels[:, 0]) - 10.0 * torch.abs(base_ang_vels[:, 2]))
         self.rew_buf[:, 2] += self.stage_buf[:, 4]*(-base_vel_penalties)
+        print("stage:", self.stage_buf[0, :], "one turn: ", self.is_one_turn_buf[0], "base ang vel: ", base_ang_vels[0, :])
+        
         # energy
         self.rew_buf[:, 3] = -torch.square(self.dof_torques).mean(dim=-1)
         # style
@@ -656,6 +671,7 @@ class Env(VecTask):
                 com_height <= 0.26, foot_contact.mean(dim=-1) >= 1.0)).type(torch.float32)
         self.stage_buf[:, 1] = (1.0 - from1_to2)*self.stage_buf[:, 1]
         self.stage_buf[:, 2] = from1_to2 + (1.0 - from1_to2)*self.stage_buf[:, 2]
+        # print("com height: ", com_height[0])
         from0_to1 = torch.logical_and(
             self.stage_buf[:, 0] == 1.0, torch.logical_and(
                 self.progress_buf*self.control_dt > self.start_time_buf, torch.logical_and(
@@ -761,7 +777,7 @@ def jit_compute_observations(
     # DoF's position and velocity
     
     obs_list.append(dof_pos) # 12
-    obs_list.append(dof_vel) # 12
+    # obs_list.append(dof_vel) # 12
     # previous actions
     obs_list.append(prev_actions) # 12
     # central phase
@@ -772,5 +788,5 @@ def jit_compute_observations(
     # command
     obs_list.append(command) # 3
     # concatenate
-    obs = torch.cat(obs_list, dim=-1) # 3 + 12*3 + 4 + 3
+    obs = torch.cat(obs_list, dim=-1) # 3 + 12*2 + 4 + 3
     return obs
