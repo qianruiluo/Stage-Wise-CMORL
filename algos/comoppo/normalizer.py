@@ -23,7 +23,10 @@ class RewardRMS(object):
             if self.max_cnt is not None and self.count[stage_idx] >= self.max_cnt:
                 continue
 
+            # print("reshaped_stage: ", reshaped_stage)
+            # print("reshaped_data: ", reshaped_data)
             stage_data = reshaped_data[reshaped_stage[:, stage_idx] == 1] # (N, reward_dim)
+            # print("stage_data ", stage_idx, ": ", stage_data)
             if stage_data.numel() == 0:
                 continue
 
@@ -61,6 +64,8 @@ class RewardRMS(object):
             self.mean[:] = torch.tensor(mean, dtype=torch.float32, device=self.device)
             self.var[:] = torch.tensor(var, dtype=torch.float32, device=self.device)
             self.count[:] = torch.tensor(count, dtype=torch.int64, device=self.device)
+            
+            print("reward rms load success. mean: ", self.mean, " var: ", self.var, " count: ", self.count)
 
     def save(self, save_dir, model_num):
         file_name = f"{save_dir}/{self.name}_scale/{model_num}.pkl"

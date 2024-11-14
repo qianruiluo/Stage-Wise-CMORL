@@ -30,6 +30,7 @@
 
 import math
 import numpy as np
+import random
 import mujoco, mujoco_viewer
 from tqdm import tqdm
 from collections import deque
@@ -80,17 +81,19 @@ def quat_rotate_inverse(q, v):
 def get_obs(data):
     '''Extracts an observation from the mujoco data structure
     '''
-    # q = data.qpos.astype(np.double)
-    # dq = data.qvel.astype(np.double)
+    q = data.qpos.astype(np.double)
+    dq = data.qvel.astype(np.double)
     
     name_sensor_pos = ['r_hip_pitch_joint_p', 'r_hip_roll_joint_p', 'r_thigh_joint_p', 'r_calf_joint_p', 'r_ankle_pitch_joint_p', 'r_ankle_roll_joint_p', 
         'l_hip_pitch_joint_p', 'l_hip_roll_joint_p', 'l_thigh_joint_p', 'l_calf_joint_p', 'l_ankle_pitch_joint_p', 'l_ankle_roll_joint_p']
     name_sensor_vel = ['r_hip_pitch_joint_v', 'r_hip_roll_joint_v', 'r_thigh_joint_v', 'r_calf_joint_v', 'r_ankle_pitch_joint_v', 'r_ankle_roll_joint_v', 
         'l_hip_pitch_joint_v', 'l_hip_roll_joint_v', 'l_thigh_joint_v', 'l_calf_joint_v', 'l_ankle_pitch_joint_v', 'l_ankle_roll_joint_v']
-    q = np.array([data.sensor(name).data[0] for name in name_sensor_pos])
-    dq = np.array([data.sensor(name).data[0] for name in name_sensor_vel])
+    # q = np.array([data.sensor(name).data[0] for name in name_sensor_pos])
+    # dq = np.array([data.sensor(name).data[0] for name in name_sensor_vel])
     
     # print("dq:", dq, "qvel:", data.qvel.astype(np.double)[-12:])
+    # print("q:", q, "q2:", data.qpos.astype(np.double)[-12:])
+    
     
     
     quat = data.sensor('orientation').data[[1, 2, 3, 0]].astype(np.double)
@@ -133,19 +136,19 @@ def run_mujoco(agent, cfg):
     target_q_filtered = np.zeros((cfg.env.num_actions), dtype=np.double)
     action = np.zeros((cfg.env.num_actions), dtype=np.double)
     hist_obs = deque()
-    
     for _ in range(cfg.env.frame_stack):
         hist_obs.append(np.zeros([1, cfg.env.num_single_obs], dtype=np.double))
-
+    
     count_lowlevel = 0
     
     # jump_time = 3.0 * np.random.rand() + 2.0
-    jump_time = 1
-    cmd = [1, 0, 0]
+    jump_time = 2.0
+    cmd = [0, 0, 0]
     world_z = np.array([0, 0, 1.0])
     dq_filtered = np.zeros(12, dtype=np.double)
     
     count_csv = 0
+    first_flag=1
     with open('sim2sim_robot_states.csv', 'w', newline='') as csvfile:
         csvwriter = csv.writer(csvfile)
         # csvwriter.writerow([f'q_{i}' for i in range(19)])
@@ -159,96 +162,115 @@ def run_mujoco(agent, cfg):
             "sim2sim_target_dof_pos_4", "sim2sim_target_dof_pos_5", "sim2sim_target_dof_pos_6", "sim2sim_target_dof_pos_7",
             "sim2sim_target_dof_pos_8", "sim2sim_target_dof_pos_9", "sim2sim_target_dof_pos_10", "sim2sim_target_dof_pos_11",
         ])
+        
+        with torch.no_grad():
 
-        for _ in tqdm(range(int(cfg.sim_config.sim_duration / cfg.sim_config.dt)), desc="Simulating..."):
-            # Obtain an observation
-            
-            q, dq, quat, v, omega, gvec = get_obs(data)
-            q = q[-cfg.env.num_actions:]
-            dq = dq[-cfg.env.num_actions:]
-            
-            sim_time = count_lowlevel * cfg.sim_config.dt
-            if sim_time > jump_time:
-                cmd = [0, 1, 0]
-            if sim_time > jump_time + 0.2:
-                cmd = [0, 0, 1]
+            for _ in tqdm(range(int(cfg.sim_config.sim_duration / cfg.sim_config.dt)), desc="Simulating..."):
+                # Obtain an observation
                 
-            for i in range(6):
-                tmpq = q[i]
-                q[i] = q[i+6]
-                q[i+6] = tmpq
-
-                tmpdq = dq[i]
-                dq[i] = dq[i+6]
-                dq[i+6] = tmpdq
+                q, dq, quat, v, omega, gvec = get_obs(data)
+                q = q[-cfg.env.num_actions:]
+                dq = dq[-cfg.env.num_actions:]
                 
-            dq_filtered = 1.0 * dq + 0.0 * dq_filtered
+                sim_time = count_lowlevel * cfg.sim_config.dt
+                if sim_time > jump_time:
+                    cmd = [1, 0, 0]
+                if sim_time > jump_time + 1.0:
+                    cmd = [0, 0, 0]
+                if sim_time > jump_time + 2.0:
+                    jump_time = sim_time
+                    cmd = [1, 0, 0]
+                    
+                for i in range(6):
+                    tmpq = q[i]
+                    q[i] = q[i+6]
+                    q[i+6] = tmpq
 
-            # 1000hz -> 50hz
-            if count_lowlevel % cfg.sim_config.decimation == 0:
-                obs = np.zeros([1, cfg.env.num_single_obs], dtype=np.float32)
-                # eu_ang = quaternion_to_euler_array(quat)
-                # eu_ang[eu_ang > math.pi] -= 2 * math.pi
-                body_ori = quat_rotate_inverse(quat, world_z)
+                    tmpdq = dq[i]
+                    dq[i] = dq[i+6]
+                    dq[i+6] = tmpdq
+                    
+                dq_filtered = 1.0 * dq + 0.0 * dq_filtered
 
-                obs[0, 0:3] = body_ori
-                obs[0, 3:15] = q * cfg.normalization.obs_scales.dof_pos
-                obs[0, 15:27] = dq_filtered * cfg.normalization.obs_scales.dof_vel
-                obs[0, 27:39] = action
-                obs[0, 39] = np.cos(2 * np.pi * sim_time * 1.0)
-                obs[0, 40] = np.sin(2 * np.pi * sim_time * 1.0)
-                obs[0, 41] = np.cos(2 * np.pi * sim_time * 1.0 + np.pi)
-                obs[0, 42] = np.sin(2 * np.pi * sim_time * 1.0 + np.pi)
-                obs[0, 43:46] = cmd
+                # 1000hz -> 50hz
+                if count_lowlevel % cfg.sim_config.decimation == 0:
+                    obs = np.zeros([1, cfg.env.num_single_obs], dtype=np.float32)
+                    # eu_ang = quaternion_to_euler_array(quat)
+                    # eu_ang[eu_ang > math.pi] -= 2 * math.pi
+                    body_ori = quat_rotate_inverse(quat, world_z)
 
-                # obs = np.clip(obs, -cfg.normalization.clip_observations, cfg.normalization.clip_observations)
+                    obs[0, 0:3] = body_ori
+                    obs[0, 3:15] = q * cfg.normalization.obs_scales.dof_pos
+                    # obs[0, 15:27] = dq_filtered * cfg.normalization.obs_scales.dof_vel
+                    obs[0, 15:27] = action
+                    # obs[0, 39] = np.cos(2 * np.pi * sim_time * 1.0)
+                    # obs[0, 40] = np.sin(2 * np.pi * sim_time * 1.0)
+                    # obs[0, 41] = np.cos(2 * np.pi * sim_time * 1.0 + np.pi)
+                    # obs[0, 42] = np.sin(2 * np.pi * sim_time * 1.0 + np.pi)
+                    obs[0, 27:30] = cmd
+
+                    # obs = np.clip(obs, -cfg.normalization.clip_observations, cfg.normalization.clip_observations)
+                    if first_flag:
+                        for _ in range(cfg.env.frame_stack):
+                            hist_obs.append(obs)
+                            hist_obs.popleft()
+                        first_flag = 0
+                    hist_obs.append(obs)
+                    hist_obs.popleft()
+
+                    policy_input = np.zeros([1, cfg.env.num_observations], dtype=np.float32)
+                    for i in range(cfg.env.frame_stack):
+                        policy_input[0, i * cfg.env.num_single_obs : (i + 1) * cfg.env.num_single_obs] = hist_obs[i][0, :]
+                    # print("obs:",policy_input)
+                    action[:] = agent.getAction(torch.Tensor(policy_input).to(agent.device), True).detach().cpu().numpy()
+                    # action = np.clip(action, -cfg.normalization.clip_actions, cfg.normalization.clip_actions)
+                    # target_q = action * 0
+                    target_q = action * cfg.control.action_scale
+                    
+                    if count_csv < 500:
+                        csv_q = np.zeros(27)
+                        csv_ori = quat_rotate_inverse(quat, world_z)
+                        # csv_euler_ang = quaternion_to_euler_array(q[3:7])
+                        csv_q[0:3] = csv_ori
+                        csv_q[3:15] = q[:]
+                        csv_q[15:] = target_q[:]
+                        csvwriter.writerow(csv_q.tolist())
+                    count_csv += 1
+
+                    target_dq = np.zeros((cfg.env.num_actions), dtype=np.double)
+                    
+                    # Generate PD control
+                    target_q_filtered = cfg.control.action_smooth_weight*target_q + (1.0 - cfg.control.action_smooth_weight)*target_q_filtered
                 
-                hist_obs.append(obs)
-                hist_obs.popleft()
+                tau = pd_control(target_q_filtered, q, cfg.robot_config.kps,
+                                target_dq, dq, cfg.robot_config.kds)  # Calc torques
+                # print("tau:", tau)
 
-                policy_input = np.zeros([1, cfg.env.num_observations], dtype=np.float32)
-                for i in range(cfg.env.frame_stack):
-                    policy_input[0, i * cfg.env.num_single_obs : (i + 1) * cfg.env.num_single_obs] = hist_obs[i][0, :]
-                # print("obs:",policy_input)
-                action[:] = agent.getAction(torch.Tensor(policy_input).to(agent.device), True).detach().cpu().numpy()
-                # action = np.clip(action, -cfg.normalization.clip_actions, cfg.normalization.clip_actions)
-                # target_q = action * 0
-                target_q = action * cfg.control.action_scale
-                
-                if count_csv < 500:
-                  csv_q = np.zeros(27)
-                  csv_ori = quat_rotate_inverse(quat, world_z)
-                  # csv_euler_ang = quaternion_to_euler_array(q[3:7])
-                  csv_q[0:3] = csv_ori
-                  csv_q[3:15] = q[:]
-                  csv_q[15:] = target_q[:]
-                  csvwriter.writerow(csv_q.tolist())
-                count_csv += 1
+                tau = np.clip(tau, -cfg.robot_config.tau_limit, cfg.robot_config.tau_limit)  # Clamp torques
+                for i in range(6):
+                    tmptau = tau[i]
+                    tau[i] = tau[i+6]
+                    tau[i+6] = tmptau
+                data.ctrl = tau
+                # print("action:", action)
 
-                target_dq = np.zeros((cfg.env.num_actions), dtype=np.double)
-                
-                # Generate PD control
-                target_q_filtered = cfg.control.action_smooth_weight*target_q + (1.0 - cfg.control.action_smooth_weight)*target_q_filtered
-            
-            tau = pd_control(target_q_filtered, q, cfg.robot_config.kps,
-                            target_dq, dq, cfg.robot_config.kds)  # Calc torques
-
-            tau = np.clip(tau, -cfg.robot_config.tau_limit, cfg.robot_config.tau_limit)  # Clamp torques
-            for i in range(6):
-                tmptau = tau[i]
-                tau[i] = tau[i+6]
-                tau[i+6] = tmptau
-            data.ctrl = tau
-            # print("action:", action)
-
-            mujoco.mj_step(model, data)
-            viewer.render()
-            count_lowlevel += 1
+                mujoco.mj_step(model, data)
+                viewer.render()
+                count_lowlevel += 1
 
     viewer.close()
 
 
 if __name__ == '__main__':
+    
+    # seed = 1
+    
+    # np.random.seed(seed)
+    # random.seed(seed)    
+    # torch.manual_seed(seed)
+    # torch.cuda.manual_seed(seed)
+    # torch.backends.cudnn.deterministic = True
+    # torch.backends.cudnn.benchmark = False
 
     parser = argparse.ArgumentParser(description='Deactuatorvelployment script.')
     parser.add_argument('--device_type', type=str, default='gpu', help='gpu or cpu.')
@@ -267,16 +289,16 @@ if __name__ == '__main__':
             decimation = 100 # control_dt = 0.02s
 
         class robot_config:
-            kps = np.array([50, 50, 50, 50, 50, 50]*(2), dtype=np.double)
-            kds = np.array([0.5]*(12), dtype=np.double)
+            kps = np.array([40, 40, 40, 40, 40, 40]*(2), dtype=np.double)
+            kds = np.array([1.1]*(12), dtype=np.double)
             tau_limit = 21. * np.ones(12, dtype=np.double)
             
             
         class env:
             num_actions = 12
             frame_stack = 10
-            num_single_obs = 3 + 12*3 + 4 + 3
-            num_observations = (3 + 12*3 + 4 + 3) * 10
+            num_single_obs = 3 + 12*2 + 3
+            num_observations = (3 + 12*2 + 3) * 10
             
         class normalization:
             class obs_scales:
@@ -286,14 +308,14 @@ if __name__ == '__main__':
                 dof_vel = 1
                 quat = 1.
             clip_observations = 100.
-            clip_actions = 10.
+            clip_actions = 100.
             
         class control:
-            action_scale = 0.05
-            action_smooth_weight = 0.1
+            action_scale = 0.1
+            action_smooth_weight = 1.0
     
     args.name = 'sim2sim'
-    # device
+    # deviceresults/piforjump_student/seed_1_student_Nov06_11-06-44/checkpoint/model_100001792.pt
     if torch.cuda.is_available() and args.device_type == 'gpu':
         device_name = f'cuda:{args.gpu_idx}'
         print('[torch] cuda is used.')

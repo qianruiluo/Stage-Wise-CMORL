@@ -5,7 +5,7 @@ model:
             shape: [256, 128, 64]
             activation: ELU
         use_action_bound: false
-        log_std_init: -1.7
+        log_std_init: -0.4
         log_std_fix: false
     reward_critic:
         mlp:

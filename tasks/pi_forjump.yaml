@@ -9,7 +9,7 @@ n_total_steps: 1000000000
 
 sim:
     physics_engine: 'physx'
-    sim_dt: 0.005
+    sim_dt: 0.002
     con_dt: 0.02
     substeps: 1
     up_axis: "z"
@@ -37,15 +37,15 @@ sim:
         ##########################################
 
 env:
-    num_envs: 2048
+    num_envs: 4096
     env_spacing: 2.0
     history_len: 10
     enable_camera_sensors: False
 
     reward_names: [com_pos, body_balance, vel, energy, style]
     cost_names: [foot_contact, body_contact, joint_pos, joint_vel, joint_torque]
-    reward_scales: [10.0, 10, 0.1, 0.05, 20.0]
-    cost_scales: [0.5, 0.1, 0.02, 10, 5]
+    # reward_scales: [10.0, 20, 1.0, 0.05, 10.0]
+    # cost_scales: [0.5, 0.1, 0.02, 10, 10]
     # reward_scales: [10.0, 10, 0.01, 0.05, 1.0]
     # cost_scales: [0.5, 0.1, 0.02, 10, 10]
     stage_names: [stand, sit, jump, air, land]
@@ -142,7 +142,7 @@ env:
             21, 21, 21, 21, 21, 21,
         ]
         joint_torque_upper: [
-            19, 19, 19, 19, 19, 19,
-            19, 19, 19, 19, 19, 19,
+            21, 21, 21, 21, 21, 21,
+            21, 21, 21, 21, 21, 21,
         ]
         ########################

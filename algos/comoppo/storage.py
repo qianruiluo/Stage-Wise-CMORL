@@ -111,7 +111,9 @@ class ReplayBuffer:
 
         # get stages
         stage_completes_tensor = (1.0 - (stages_tensor*next_stages_tensor).sum(dim=-1, keepdim=True)) # (n_steps_per_env, n_envs, 1)
-        stage_completes_tensor = (stage_completes_tensor > 0.5).type(torch.float32)
+        # print("stages_tensor*next_stages_tensor: ", (stages_tensor*next_stages_tensor)) 
+        # print("stage_completes_tensor: ", stage_completes_tensor[0].mean(dim=0))
+        stage_completes_tensor = (stage_completes_tensor > 0.5).type(torch.float32) # 当前stage与下一个stage不一样时为1，否则为0
 
         # normalize 
         norm_obs_tensor = obs_rms.normalize(obs_tensor)
@@ -122,14 +124,13 @@ class ReplayBuffer:
         norm_reward_mean = 0.1
         norm_rewards_tensor = reward_rms.normalize(
             rewards_tensor, stages_tensor, default_mean=norm_reward_mean, default_std=norm_reward_std)
-        norm_rewards_tensor += norm_rewards_tensor*stage_completes_tensor*self.discount_factor/(1.0 - self.discount_factor)
-        norm_costs_tensor = fails_tensor.unsqueeze(-1)*costs_tensor/(1.0 - self.discount_factor) \
-                        + (1.0 - fails_tensor.unsqueeze(-1))*costs_tensor
+        norm_rewards_tensor += norm_rewards_tensor*stage_completes_tensor*self.discount_factor/(1.0 - self.discount_factor) # if stage changes, add the discounted reward. Otherwise, use the current reward.
+        # costs不经过normalize，直接使用
+        norm_costs_tensor = fails_tensor.unsqueeze(-1)*costs_tensor/(1.0 - self.discount_factor) + (1.0 - fails_tensor.unsqueeze(-1))*costs_tensor # if fail, add the discounted cost. Otherwise, use the current cost.
 
         # symmetrize
         sym_obs_tensor = obs_rms.normalize(torch.matmul(obs_tensor, self.obs_sym_mat))
         sym_states_tensor = state_rms.normalize(torch.matmul(states_tensor, self.state_sym_mat))
-        
         # get values
         next_reward_values_tensor = reward_critic(norm_next_obs_tensor, norm_next_states_tensor, next_stages_tensor) # (n_steps_per_env, n_envs, reward_dim)
         reward_values_tensor = reward_critic(norm_obs_tensor, norm_states_tensor, stages_tensor) # (n_steps_per_env, n_envs, reward_dim)
@@ -142,6 +143,7 @@ class ReplayBuffer:
         cost_delta = torch.zeros_like(costs_tensor[0]) # (n_envs, cost_dim)
         cost_targets = torch.zeros_like(costs_tensor) # (n_steps_per_env, n_envs, cost_dim)
         for t in reversed(range(len(reward_targets))):
+            # reward_targets指的是t时刻的reward的target，即t时刻的reward加上t+1时刻估计的reward的value。如果没结束，还要加上reward_delta，即t时刻reward的gae乘以gae_coeff。
             reward_targets[t, :, :] = norm_rewards_tensor[t, :, :] \
                                     + self.discount_factor*(1.0 - fails_tensor[t, :].unsqueeze(-1))*next_reward_values_tensor[t, :, :] \
                                     + self.discount_factor*(1.0 - dones_tensor[t, :].unsqueeze(-1))*reward_delta

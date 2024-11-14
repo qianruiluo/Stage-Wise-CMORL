@@ -7,7 +7,7 @@ import torch
 import os
 
 EPS = 1e-8
-
+torch.set_printoptions(precision=3,linewidth=200, sci_mode=False)
 class Agent:
     def __init__(self, args) -> None:
         # for base
@@ -19,12 +19,10 @@ class Agent:
         self.action_bound_min = args.action_bound_min
         self.action_bound_max = args.action_bound_max
 
-
-
         # for normalization
         self.history_len = args.history_len
         self.obs_rms = ObsRMS('obs', self.obs_dim, self.history_len, self.device)
-
+ 
         # declare actor
         model_cfg = args.model
         print("model cfg:", model_cfg)
@@ -42,20 +40,19 @@ class Agent:
         
         norm_obs_tensor = self.obs_rms.normalize(obs_tensor) 
         
-        last_obs = obs_tensor[0][-46:].detach().cpu().numpy()
+        last_obs = obs_tensor[0][-30:].detach().cpu().numpy()
         print("----------------------------------------------")
+        # print("obs_tensor:\n", obs_tensor)
+        # print("norm_obs_tensor:\n", norm_obs_tensor)
         print("obs_ori:", last_obs[0:3])
         print("obs_q:", last_obs[3:15])
-        print("obs_dq:", last_obs[15:27])
-        print("obs_action:", last_obs[27:39])
-        print("obs_phase:", last_obs[39:43])
-        print("obs_command:", last_obs[43:46])
-        
-        
+        print("obs_action:", last_obs[15:27])
+        print("obs_command:", last_obs[27:30])
         
         epsilon_tensor = torch.randn(norm_obs_tensor.shape[:-1] + (self.action_dim,), device=self.device)
         self.actor.updateActionDist(norm_obs_tensor, epsilon_tensor)
         _, unnorm_action_tensor = self.actor.sample(deterministic)
+        # print("unnorm action: ", unnorm_action_tensor)
         return unnorm_action_tensor
     
     def copyObsRMS(self, obs_rms):

@@ -69,7 +69,13 @@ class ActorGaussian(ActorBase):
         output: (mean, log_std, std)
         '''
         x = self.model(state)
-        mean = self.last_activation(self.mean_decoder(x))
+        mean_dec = self.mean_decoder(x)
+        mean = self.last_activation(mean_dec)
+        # print("================forward===================")
+        # print("state: \r\n",state)
+        # print("x: \r\n",x)
+        # print("mean_dec: \r\n",mean_dec)
+        # print("mean: \r\n",mean)
         log_std = self.std_decoder(x)
         log_std = torch.clamp(log_std, self.log_std_min, self.log_std_max)
         std = torch.exp(log_std)
@@ -78,14 +84,21 @@ class ActorGaussian(ActorBase):
     def updateActionDist(self, state:torch.Tensor, epsilon:torch.Tensor) -> None:
         self.action_mean, self.action_log_std, self.action_std = \
             self.forward(state)
+        # print("================updateActionDist===================")
+        # print("state: \r\n",state)
+        # print("self.action_mean: \r\n",self.action_mean)
         self.normal_action = self.action_mean + epsilon*self.action_std
         self.action_dist = torch.distributions.Normal(self.action_mean, self.action_std)
 
     def sample(self, deterministic:bool=False) -> Tuple[torch.Tensor, torch.Tensor]:
         if deterministic:
             norm_action = self.action_mean
+            # print("================sample 1===================")
         else:
             norm_action = self.normal_action
+            # print("================sample 2===================")
+        # print(self.action_bound_min, self.action_bound_max)
+        # print(norm_action)
         unnorm_action = unnormalize(norm_action, self.action_bound_min, self.action_bound_max)
         return norm_action, unnorm_action
 

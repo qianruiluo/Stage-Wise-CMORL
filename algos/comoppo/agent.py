@@ -34,7 +34,8 @@ class Agent(AgentBase):
 
         # for learning
         self.discount_factor = args.discount_factor
-        self.critic_lr = args.critic_lr
+        self.reward_critic_lr = args.reward_critic_lr
+        self.cost_critic_lr = args.cost_critic_lr
         self.actor_lr = args.actor_lr
         self.n_critic_iters = args.n_critic_iters
         self.n_actor_iters = args.n_actor_iters
@@ -86,8 +87,8 @@ class Agent(AgentBase):
 
         # declare optimizers
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.actor_lr)
-        self.reward_critic_optimizer = torch.optim.Adam(self.reward_critic.parameters(), lr=self.critic_lr)
-        self.cost_critic_optimizer = torch.optim.Adam(self.cost_critic.parameters(), lr=self.critic_lr)
+        self.reward_critic_optimizer = torch.optim.Adam(self.reward_critic.parameters(), lr=self.reward_critic_lr)
+        self.cost_critic_optimizer = torch.optim.Adam(self.cost_critic.parameters(), lr=self.cost_critic_lr)
 
         # declare replay buffer
         self.replay_buffer = ReplayBuffer(
@@ -171,7 +172,7 @@ class Agent(AgentBase):
             old_log_probs = self.actor.getLogProb(actions_tensor)
 
             # calculate constraints & symmetric actions
-            sym_old_action_means = torch.matmul(old_action_means, self.joint_sym_mat)
+            sym_old_action_means = torch.matmul(old_action_means, self.joint_sym_mat) # action直接乘joint_sym_mat，得到镜像的action
             con_vals = cost_targets_tensor.mean(dim=0)
 
             # calculate reduced GAEs
@@ -195,8 +196,8 @@ class Agent(AgentBase):
             clipped_ratios = torch.clamp(prob_ratios, min=1.0-self.clip_ratio, max=1.0+self.clip_ratio)
             actor_loss = -torch.mean(torch.minimum(reduced_gaes_tensor*prob_ratios, reduced_gaes_tensor*clipped_ratios))
             # ========= symmetry constraint ========= #
-            sym_action_means = self.actor(sym_obs_tensor, sym_states_tensor, stages_tensor)[0]
-            sym_constraints = torch.abs(sym_action_means - sym_old_action_means)
+            sym_action_means = self.actor(sym_obs_tensor, sym_states_tensor, stages_tensor)[0] # 输入的观测量经过镜像操作,网络输出的action
+            sym_constraints = torch.abs(sym_action_means - sym_old_action_means) # 衡量对称性的指标。镜像观测量和镜像action，两种不同镜像方式得到的action的差值，越小越好
             sym_constraint = sym_constraints.mean()
             if self.is_sym_con and sym_constraint > self.sym_con_threshold:
                 actor_loss += self.con_coeff*sym_constraint
