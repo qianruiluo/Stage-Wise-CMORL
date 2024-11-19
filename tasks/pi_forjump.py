@@ -99,8 +99,8 @@ class Env(VecTask):
         self.max_episode_length = int(self.max_episode_length_s/self.control_dt + 0.5)
         self.reward_names = self.cfg["env"]["reward_names"]
         self.cost_names = self.cfg["env"]["cost_names"]
-        # self.reward_scales = self.cfg["env"]["reward_scales"]
-        # self.cost_scales = self.cfg["env"]["cost_scales"]
+        self.reward_scales = self.cfg["env"]["reward_scales"]
+        self.cost_scales = self.cfg["env"]["cost_scales"]
         self.stage_names = self.cfg["env"]["stage_names"]
         self.num_rewards = len(self.reward_names)
         self.num_costs = len(self.cost_names)
@@ -126,6 +126,7 @@ class Env(VecTask):
         self.command_vel = torch.zeros((self.num_envs, 2), dtype=torch.float32, device=self.device)
         self.land_time_buf = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
         self.jump_time_buf = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
+        self.sit_time_buf = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
         self.init_phase_buf = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
         self.first_jump_time_buf = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
         self.last_jump_time_buf = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
@@ -234,35 +235,47 @@ class Env(VecTask):
         self.dof_torques_upper_limits = torch.minimum(self.dof_torques_upper_limits, self.default_dof_torques_upper_limits)
 
         # for observation and action symmetric matrix
+        # joint symmetric matrix
+        #[[0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0]
+        # [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0]
+        # [0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0]
+        # [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0]
+        # [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0]
+        # [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
+        # [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        # [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        # [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        # [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0]
+        # [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]
+        # [0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]]
         self.joint_sym_mat = torch.zeros((self.num_dofs, self.num_dofs), device=self.device, dtype=torch.float32, requires_grad=False)
-        self.joint_sym_mat[0, 6] = 1.0
-        self.joint_sym_mat[6, 0] = 1.0
-        self.joint_sym_mat[1:3, 7:9] = -torch.eye(2, device=self.device, dtype=torch.float32)
-        self.joint_sym_mat[7:9, 1:3] = -torch.eye(2, device=self.device, dtype=torch.float32)
-        
-        self.joint_sym_mat[3:6, 9:12] = torch.eye(3, device=self.device, dtype=torch.float32)
-        self.joint_sym_mat[9:12, 3:6] = torch.eye(3, device=self.device, dtype=torch.float32)
+        self.joint_sym_mat[0:6, 6:12] = torch.eye(6, device=self.device, dtype=torch.float32)
+        self.joint_sym_mat[6:12, 0:6] = torch.eye(6, device=self.device, dtype=torch.float32)
         
 
         
         self.obs_sym_mat = torch.zeros((self.num_obs, self.num_obs), device=self.device, dtype=torch.float32, requires_grad=False)
-        # raw_obs_sym_mat = torch.eye(self.raw_obs_dim, device=self.device, dtype=torch.float32, requires_grad=False)
-        # raw_obs_sym_mat[1, 1] = -1.0
-        # for i in range(3):
-        #     raw_obs_sym_mat[(3+self.num_dofs*(i)):(3+self.num_dofs*(i+1)), (3+self.num_dofs*(i)):(3+self.num_dofs*(i+1))] = self.joint_sym_mat.clone()
+        # raw obs: [body_orientation(3), DoF's position(12), prev_actions(12), jump phase(1), commands(3)]
+        raw_obs_sym_mat = torch.eye(self.raw_obs_dim, device=self.device, dtype=torch.float32, requires_grad=False)
+        raw_obs_sym_mat[1, 1] = -1.0
+        for i in range(2):
+            raw_obs_sym_mat[(3+self.num_dofs*(i)):(3+self.num_dofs*(i+1)), (3+self.num_dofs*(i)):(3+self.num_dofs*(i+1))] = self.joint_sym_mat.clone()
+        raw_obs_sym_mat[3+2*self.num_dofs + 3, 3+2*self.num_dofs + 3] = -1.0
         # raw_obs_sym_mat[3+3*self.num_dofs:7+3*self.num_dofs, 3+3*self.num_dofs:7+3*self.num_dofs] = 0.0
         # raw_obs_sym_mat[3+3*self.num_dofs:5+3*self.num_dofs, 5+3*self.num_dofs:7+3*self.num_dofs] = torch.eye(2, device=self.device, dtype=torch.float32)
         # raw_obs_sym_mat[5+3*self.num_dofs:7+3*self.num_dofs, 3+3*self.num_dofs:5+3*self.num_dofs] = torch.eye(2, device=self.device, dtype=torch.float32)
         # raw_obs_sym_mat[7+3*self.num_dofs:, 7+3*self.num_dofs:] = torch.eye(3, device=self.device, dtype=torch.float32)        
-        # for i in range(self.history_len):
-        #     self.obs_sym_mat[(self.raw_obs_dim*i):(self.raw_obs_dim*(i+1)), (self.raw_obs_dim*i):(self.raw_obs_dim*(i+1))] = raw_obs_sym_mat.clone()
+        for i in range(self.history_len):
+            self.obs_sym_mat[(self.raw_obs_dim*i):(self.raw_obs_dim*(i+1)), (self.raw_obs_dim*i):(self.raw_obs_dim*(i+1))] = raw_obs_sym_mat.clone()
+            
+        # state symmetric matrix: [linear vel(3), angular vel(3), com height(1), foot contact(2)]
         self.state_sym_mat = torch.eye(self.num_states - self.num_stages, device=self.device, dtype=torch.float32, requires_grad=False)
-        # self.state_sym_mat[1, 1] = -1.0
-        # self.state_sym_mat[3, 3] = -1.0
-        # self.state_sym_mat[5, 5] = -1.0
-        # self.state_sym_mat[7:11, 7:11] = 0
-        # self.state_sym_mat[7, 8] = 1.0
-        # self.state_sym_mat[8, 7] = 1.0
+        self.state_sym_mat[1, 1] = -1.0 # y vel
+        self.state_sym_mat[3, 3] = -1.0 # x ang vel(roll)
+        self.state_sym_mat[5, 5] = -1.0 # z ang vel(yaw)
+        self.state_sym_mat[7:8, 7:8] = 0
+        self.state_sym_mat[7, 8] = 1.0
+        self.state_sym_mat[8, 7] = 1.0
         # self.state_sym_mat[9, 10] = 1.0
         # self.state_sym_mat[10, 9] = 1.0
 
@@ -535,14 +548,10 @@ class Env(VecTask):
         hand_contact_forces = self.contact_forces[:, self.hand_indices, :]
         
         foot_contact = (torch.norm(foot_contact_forces, dim=2) > 15).type(torch.float)
-        
-        foot_quaternions = self.rigid_body_states[:, self.foot_indices, 3:7]
-        foot_z = [torch_utils.quat_rotate_inverse(foot_quaternions[:, 0].view(self.num_envs, 4), self.world_z), torch_utils.quat_rotate_inverse(foot_quaternions[:, 1].view(self.num_envs, 4), self.world_z)]       
+   
         # print("foot ori: ", -torch.arccos(torch.clamp(foot_z[0][:, 2], -1.0, 1.0)))
         
         # print("foot contact force: ", torch.norm(foot_contact_forces[0], dim=1))
-        foot_sym_loss = 0.01 * (torch.abs(torch.norm(foot_contact_forces[:, 0], dim=1) - torch.norm(foot_contact_forces[:, 1], dim=1))) \
-            + 1.0 * (torch.arccos(torch.clamp(foot_z[0][:, 2], -1.0, 1.0)) + torch.arccos(torch.clamp(foot_z[1][:, 2], -1.0, 1.0)))
         # print("foot sym loss: ", foot_sym_loss)
         
         # left_phase = (self.obs_buf[:, -4] > 0).to(torch.float)
@@ -584,9 +593,9 @@ class Env(VecTask):
         # energy
         self.rew_buf[:, 3] = -torch.square(self.dof_torques).mean(dim=-1)
         # style
-        foot_sym_factor = 0.1
+        foot_sym_factor = 0.0
         
-        self.rew_buf[:, 4]  = self.stage_buf[:, 0]*(-torch.square(self.dof_positions - self.default_dof_positions).mean(dim=-1)) - foot_sym_loss * foot_sym_factor
+        self.rew_buf[:, 4]  = self.stage_buf[:, 0]*(-torch.square(self.dof_positions - self.default_dof_positions).mean(dim=-1))
         self.rew_buf[:, 4] += self.stage_buf[:, 1]*(-torch.square(self.dof_positions - self.sit_dof_positions).mean(dim=-1))
         self.rew_buf[:, 4] += self.stage_buf[:, 2]*(-torch.square(self.dof_positions - self.default_dof_positions).mean(dim=-1))
         self.rew_buf[:, 4] += self.stage_buf[:, 3]*(-torch.square(self.dof_positions - self.default_dof_positions).mean(dim=-1))
@@ -597,8 +606,8 @@ class Env(VecTask):
         
 
         
-        # for i in range(0, 5):
-        #     self.rew_buf[:, i] = self.rew_buf[:, i] * self.reward_scales[i]
+        for i in range(0, 5):
+            self.rew_buf[:, i] = self.rew_buf[:, i] * self.reward_scales[i]
         # ========================================================= #
         # ==================== calculate costs ==================== #
         # foot contact
@@ -633,8 +642,8 @@ class Env(VecTask):
         if torch.any(self.dof_torques[0] > 19.0):
             print("torque: ", self.dof_torques[0])
         
-        # for i in range(0, 5):
-        #     self.cost_buf[:, i] = self.cost_buf[:, i] * self.cost_scales[i]
+        for i in range(0, 5):
+            self.cost_buf[:, i] = self.cost_buf[:, i] * self.cost_scales[i]
         
         # ========================================================= #
         
@@ -655,7 +664,7 @@ class Env(VecTask):
         self.stage_buf[:, 4] = (1.0 - from4_to0)*self.stage_buf[:, 4]
         self.stage_buf[:, 0] = from4_to0 + (1.0 - from4_to0)*self.stage_buf[:, 0]
         from3_to4 = torch.logical_and(
-            self.stage_buf[:, 3] == 1.0, torch.logical_and(foot_contact.mean(dim=-1) > 0.0, self.progress_buf*self.control_dt > self.jump_time_buf + 0.15)).type(torch.float32)
+            self.stage_buf[:, 3] == 1.0, torch.logical_and(foot_contact.mean(dim=-1) > 0.0, self.progress_buf*self.control_dt > self.jump_time_buf + 0.2)).type(torch.float32)
         self.stage_buf[:, 3] = (1.0 - from3_to4)*self.stage_buf[:, 3]
         self.stage_buf[:, 4] = from3_to4 + (1.0 - from3_to4)*self.stage_buf[:, 4]
         from2_to3 = torch.logical_and(
@@ -664,9 +673,9 @@ class Env(VecTask):
                 com_height >= 0.32)).type(torch.float32)
         self.stage_buf[:, 2] = (1.0 - from2_to3)*self.stage_buf[:, 2]
         self.stage_buf[:, 3] = from2_to3 + (1.0 - from2_to3)*self.stage_buf[:, 3]
-        from1_to2 = torch.logical_and(
+        from1_to2 = torch.logical_and(self.progress_buf*self.control_dt > self.sit_time_buf + 0.12, torch.logical_and(
             self.stage_buf[:, 1] == 1.0, torch.logical_and(
-                com_height <= 0.29, foot_contact.mean(dim=-1) >= 1.0)).type(torch.float32)
+                com_height <= 0.27, foot_contact.mean(dim=-1) >= 1.0))).type(torch.float32)
         self.stage_buf[:, 1] = (1.0 - from1_to2)*self.stage_buf[:, 1]
         self.stage_buf[:, 2] = from1_to2 + (1.0 - from1_to2)*self.stage_buf[:, 2]
         from0_to1 = torch.logical_and(
@@ -678,7 +687,9 @@ class Env(VecTask):
         # print("stage: ", self.stage_buf[0, :])
 
         jump_masks = from2_to3
+        sit_masks = self.stage_buf[:, 1] * (com_height <= 0.27)
         self.jump_time_buf[:] = jump_masks*(self.progress_buf*self.control_dt) + (1.0 - jump_masks)*self.jump_time_buf
+        self.sit_time_buf[:] = sit_masks*(self.progress_buf*self.control_dt) + (1.0 - sit_masks)*self.sit_time_buf
         
         self.last_jump_time_buf[:] = from0_to1*(self.progress_buf*self.control_dt) + (1.0 - from0_to1)*self.last_jump_time_buf
         
@@ -740,10 +751,10 @@ def jit_compute_states(
     bb_lin_vels = torch_utils.quat_rotate_inverse(base_quaternions, base_lin_vels)
     bb_ang_vels = torch_utils.quat_rotate_inverse(base_quaternions, base_ang_vels)
     com_height = base_positions[:, 2:3]
-    hand_contacts = (torch.norm(hand_contact_forces, dim=2) > 1.0).type(torch.float)
+    # hand_contacts = (torch.norm(hand_contact_forces, dim=2) > 1.0).type(torch.float)
     foot_contacts = (torch.norm(foot_contact_forces, dim=2) > 1.0).type(torch.float)
     states = torch.cat([
-        bb_lin_vels, bb_ang_vels, com_height, hand_contacts, foot_contacts, stages], dim=-1)
+        bb_lin_vels, bb_ang_vels, com_height, foot_contacts, stages], dim=-1)
     return states
 
 @torch.jit.script

@@ -30,7 +30,7 @@ def getParser():
     parser.add_argument('--gpu_idx', type=int, default=0, help='GPU index.')
     parser.add_argument('--model_num', type=int, default=0, help='num model.')
     parser.add_argument('--save_freq', type=int, default=int(1e7), help='# of time steps for save.')
-    parser.add_argument('--wandb_freq', type=int, default=int(5e4), help='# of time steps for wandb logging.')
+    parser.add_argument('--wandb_freq', type=int, default=int(40960), help='# of time steps for wandb logging.')
     parser.add_argument('--slack_freq', type=int, default=int(2.5e6), help='# of time steps for slack message.')
     parser.add_argument('--seed', type=int, default=1, help='seed number.')
     parser.add_argument('--task_cfg_path', type=str, help='cfg.yaml file location for task.')
@@ -150,6 +150,8 @@ def train(args, task_cfg, algo_cfg):
             fail_sums_tensor += fails_tensor
             fail_reason_sums_tensor += fail_reason_tensor
             
+            # print("costs: ", costs_tensor)
+            
 
             agent.step(rewards_tensor, costs_tensor, dones_tensor, fails_tensor, 
                        next_obs_tensor, next_states_tensor, next_stages_tensor)
@@ -205,7 +207,7 @@ def train(args, task_cfg, algo_cfg):
                 mean = agent.actor.getMeanStd()[0].mean().detach().cpu().numpy()
                 std = agent.actor.getMeanStd()[1].mean().detach().cpu().numpy()
                 # print("action mean: ", mean)
-                print("action  std: ", std)
+                print("action std: ", std)
 
             # send slack message
             if total_step - slack_step >= args.slack_freq and args.slack:
@@ -339,7 +341,7 @@ if __name__ == "__main__":
     args.name = f"{(args.task_name.lower())}_{(args.algo_name.lower())}"
     # save_dir
     # args.save_dir = f"results/{args.name}/seed_{args.seed}_" + datetime.now().strftime("%b%d_%H-%M-%S") # for training
-    args.save_dir = f"results/{args.name}/seed_{args.seed}_Nov13_12-28-54" # for testing
+    args.save_dir = f"results/{args.name}/seed_{args.seed}_Nov19_15-12-43" # for testing
 
     
     # args.save_dir = f"results/{args.name}/seed_{args.seed}"

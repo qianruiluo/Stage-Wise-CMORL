@@ -196,10 +196,11 @@ class Agent(AgentBase):
             clipped_ratios = torch.clamp(prob_ratios, min=1.0-self.clip_ratio, max=1.0+self.clip_ratio)
             actor_loss = -torch.mean(torch.minimum(reduced_gaes_tensor*prob_ratios, reduced_gaes_tensor*clipped_ratios))
             # ========= symmetry constraint ========= #
+            # 对称性约束的核心是，对于镜像的观测量，网络输出的action应该也是镜像对称的
             sym_action_means = self.actor(sym_obs_tensor, sym_states_tensor, stages_tensor)[0] # 输入的观测量经过镜像操作,网络输出的action
             sym_constraints = torch.abs(sym_action_means - sym_old_action_means) # 衡量对称性的指标。镜像观测量和镜像action，两种不同镜像方式得到的action的差值，越小越好
             sym_constraint = sym_constraints.mean()
-            if self.is_sym_con and sym_constraint > self.sym_con_threshold:
+            if self.is_sym_con and sym_constraint > self.sym_con_threshold: 
                 actor_loss += self.con_coeff*sym_constraint
                 
             # ======================================= #
@@ -285,7 +286,11 @@ class Agent(AgentBase):
             self.cost_critic.load_state_dict(checkpoint['cost_critic'])
             self.actor_optimizer.load_state_dict(checkpoint['actor_optimizer'])
             self.reward_critic_optimizer.load_state_dict(checkpoint['reward_critic_optimizer'])
+            for param_group in self.reward_critic_optimizer.param_groups:
+                param_group['lr'] = self.reward_critic_lr
             self.cost_critic_optimizer.load_state_dict(checkpoint['cost_critic_optimizer'])
+            for param_group in self.cost_critic_optimizer.param_groups:
+                param_group['lr'] = self.cost_critic_lr
             cprint(f'[{self.name}] load success.', bold=True, color="blue")
             return int(model_num)
         else:

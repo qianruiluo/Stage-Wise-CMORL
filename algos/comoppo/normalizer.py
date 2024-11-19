@@ -43,6 +43,8 @@ class RewardRMS(object):
             self.mean[stage_idx] += delta_mean * stage_count / total_count
             self.var[stage_idx] = M2 / total_count
             self.count[stage_idx] += stage_count
+            
+            # print("reward rms var at stage ", stage_idx, ": ", self.var[stage_idx])
 
     @torch.no_grad()
     def normalize(self, data, stage, default_mean=0.0, default_std=1.0):
@@ -50,7 +52,7 @@ class RewardRMS(object):
         reshaped_stage = stage.view(-1, self.num_stages)
         norm_data = torch.zeros_like(reshaped_data)
         for stage_idx in range(self.num_stages):
-            mask = reshaped_stage[:, stage_idx:(stage_idx+1)] # (N, 1)
+            mask = reshaped_stage[:, stage_idx:(stage_idx+1)] # (N, 1), 1 if in this stage, 0 otherwise
             mean = self.mean[stage_idx:(stage_idx+1)] # (1, reward_dim)
             std = torch.sqrt(self.var[stage_idx:(stage_idx+1)] + 1e-8) # (1, reward_dim)
             norm_data += mask * ((reshaped_data - mean) / std)

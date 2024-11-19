@@ -31,7 +31,7 @@ def getParser():
     parser.add_argument('--gpu_idx', type=int, default=0, help='GPU index.')
     parser.add_argument('--model_num', type=int, default=0, help='num model.')
     parser.add_argument('--save_freq', type=int, default=int(1e7), help='# of time steps for save.')
-    parser.add_argument('--wandb_freq', type=int, default=int(5e4), help='# of time steps for wandb logging.')
+    parser.add_argument('--wandb_freq', type=int, default=int(40960), help='# of time steps for wandb logging.')
     parser.add_argument('--slack_freq', type=int, default=int(2.5e6), help='# of time steps for slack message.')
     parser.add_argument('--seed', type=int, default=1, help='seed number.')
     parser.add_argument('--task_cfg_path', type=str, help='cfg.yaml file location for task.')
