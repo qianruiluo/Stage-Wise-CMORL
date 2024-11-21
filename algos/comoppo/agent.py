@@ -111,6 +111,16 @@ class Agent(AgentBase):
         self.actor.updateActionDist(norm_obs_tensor, norm_state_tensor, stage_tensor, epsilon_tensor)
         norm_action_tensor, unnorm_action_tensor = self.actor.sample(deterministic)
         log_prob_tensor = self.actor.getLogProb()
+        
+        last_obs = obs_tensor[0][-31:].detach().cpu().numpy()
+        print("----------------------------------------------")
+        # print("obs_tensor:\n", obs_tensor)
+        # print("norm_obs_tensor:\n", norm_obs_tensor)
+        print("obs_ori:", last_obs[0:3])
+        print("obs_q:", last_obs[3:15])
+        print("obs_action:", last_obs[15:27])
+        print("obs_phase:", last_obs[27])
+        print("obs_command:", last_obs[28:31])
 
         self.obs_tensor = obs_tensor.clone()
         self.state_tensor = state_tensor.clone()
@@ -170,6 +180,7 @@ class Agent(AgentBase):
             old_action_dists = self.actor.getDist()
             old_action_means = self.actor.getMeanStd()[0]
             old_log_probs = self.actor.getLogProb(actions_tensor)
+            last_action_means = old_action_means
 
             # calculate constraints & symmetric actions
             sym_old_action_means = torch.matmul(old_action_means, self.joint_sym_mat) # action直接乘joint_sym_mat，得到镜像的action
@@ -202,6 +213,7 @@ class Agent(AgentBase):
             sym_constraint = sym_constraints.mean()
             if self.is_sym_con and sym_constraint > self.sym_con_threshold: 
                 actor_loss += self.con_coeff*sym_constraint
+                
                 
             # ======================================= #
             self.actor_optimizer.zero_grad()
@@ -289,8 +301,6 @@ class Agent(AgentBase):
             for param_group in self.reward_critic_optimizer.param_groups:
                 param_group['lr'] = self.reward_critic_lr
             self.cost_critic_optimizer.load_state_dict(checkpoint['cost_critic_optimizer'])
-            for param_group in self.cost_critic_optimizer.param_groups:
-                param_group['lr'] = self.cost_critic_lr
             cprint(f'[{self.name}] load success.', bold=True, color="blue")
             return int(model_num)
         else:

@@ -340,8 +340,8 @@ if __name__ == "__main__":
     args.algo_name = algo_cfg['name']
     args.name = f"{(args.task_name.lower())}_{(args.algo_name.lower())}"
     # save_dir
-    # args.save_dir = f"results/{args.name}/seed_{args.seed}_" + datetime.now().strftime("%b%d_%H-%M-%S") # for training
-    args.save_dir = f"results/{args.name}/seed_{args.seed}_Nov19_15-12-43" # for testing
+    # args.save_dir = f"results/{args.name}/seed_{args.seed}_" + datetime.now().strftime("%b%d_%H-%M-%S") # for new folder
+    args.save_dir = f"results/{args.name}/seed_{args.seed}_Nov21_15-53-27" #for existing folder
 
     
     # args.save_dir = f"results/{args.name}/seed_{args.seed}"

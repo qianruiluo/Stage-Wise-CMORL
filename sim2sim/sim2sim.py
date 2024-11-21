@@ -142,8 +142,8 @@ def run_mujoco(agent, cfg):
     count_lowlevel = 0
     
     # jump_time = 3.0 * np.random.rand() + 2.0
-    jump_time = 2.0
-    cmd = [0, 0, 0]
+    jump_period = 0.55
+    cmd = [jump_period, 2.0, 0]
     world_z = np.array([0, 0, 1.0])
     dq_filtered = np.zeros(12, dtype=np.double)
     
@@ -173,13 +173,7 @@ def run_mujoco(agent, cfg):
                 dq = dq[-cfg.env.num_actions:]
                 
                 sim_time = count_lowlevel * cfg.sim_config.dt
-                if sim_time > jump_time:
-                    cmd = [1, 0, 0]
-                if sim_time > jump_time + 1.0:
-                    cmd = [0, 0, 0]
-                if sim_time > jump_time + 2.0:
-                    jump_time = sim_time
-                    cmd = [1, 0, 0]
+                
                     
                 for i in range(6):
                     tmpq = q[i]
@@ -200,14 +194,17 @@ def run_mujoco(agent, cfg):
                     body_ori = quat_rotate_inverse(quat, world_z)
 
                     obs[0, 0:3] = body_ori
-                    obs[0, 3:15] = q * cfg.normalization.obs_scales.dof_pos
+                    obs[0, 3:15] = q
                     # obs[0, 15:27] = dq_filtered * cfg.normalization.obs_scales.dof_vel
                     obs[0, 15:27] = action
                     # obs[0, 39] = np.cos(2 * np.pi * sim_time * 1.0)
                     # obs[0, 40] = np.sin(2 * np.pi * sim_time * 1.0)
                     # obs[0, 41] = np.cos(2 * np.pi * sim_time * 1.0 + np.pi)
                     # obs[0, 42] = np.sin(2 * np.pi * sim_time * 1.0 + np.pi)
-                    obs[0, 27:30] = cmd
+                    obs[0, 27] = (sim_time / jump_period + 0.9) % 1.0
+                    # obs[0, 27] = 0.1
+                    
+                    obs[0, 28:31] = cmd
 
                     # obs = np.clip(obs, -cfg.normalization.clip_observations, cfg.normalization.clip_observations)
                     if first_flag:
@@ -227,15 +224,15 @@ def run_mujoco(agent, cfg):
                     # target_q = action * 0
                     target_q = action * cfg.control.action_scale
                     
-                    if count_csv < 500:
-                        csv_q = np.zeros(27)
-                        csv_ori = quat_rotate_inverse(quat, world_z)
-                        # csv_euler_ang = quaternion_to_euler_array(q[3:7])
-                        csv_q[0:3] = csv_ori
-                        csv_q[3:15] = q[:]
-                        csv_q[15:] = target_q[:]
-                        csvwriter.writerow(csv_q.tolist())
-                    count_csv += 1
+                    # if count_csv < 500:
+                    #     csv_q = np.zeros(27)
+                    #     csv_ori = quat_rotate_inverse(quat, world_z)
+                    #     # csv_euler_ang = quaternion_to_euler_array(q[3:7])
+                    #     csv_q[0:3] = csv_ori
+                    #     csv_q[3:15] = q[:]
+                    #     csv_q[15:] = target_q[:]
+                    #     csvwriter.writerow(csv_q.tolist())
+                    # count_csv += 1
 
                     target_dq = np.zeros((cfg.env.num_actions), dtype=np.double)
                     
@@ -289,16 +286,16 @@ if __name__ == '__main__':
             decimation = 100 # control_dt = 0.02s
 
         class robot_config:
-            kps = np.array([40, 40, 40, 40, 40, 40]*(2), dtype=np.double)
-            kds = np.array([1.1]*(12), dtype=np.double)
-            tau_limit = 21. * np.ones(12, dtype=np.double)
+            kps = np.array([40]*(12), dtype=np.double)
+            kds = np.array([1.15]*(12), dtype=np.double)
+            tau_limit = 21 * np.ones(12, dtype=np.double)
             
             
         class env:
             num_actions = 12
             frame_stack = 10
-            num_single_obs = 3 + 12*2 + 3
-            num_observations = (3 + 12*2 + 3) * 10
+            num_single_obs = 3 + 12*2 + 1 + 3
+            num_observations = (3 + 12*2 + 1 + 3) * 10
             
         class normalization:
             class obs_scales:
@@ -307,12 +304,12 @@ if __name__ == '__main__':
                 dof_pos = 1
                 dof_vel = 1
                 quat = 1.
-            clip_observations = 100.
-            clip_actions = 100.
+            clip_observations = 10.
+            clip_actions = 10.
             
         class control:
-            action_scale = 0.1
-            action_smooth_weight = 1.0
+            action_scale = 0.5
+            action_smooth_weight = 0.1
     
     args.name = 'sim2sim'
     # deviceresults/piforjump_student/seed_1_student_Nov06_11-06-44/checkpoint/model_100001792.pt

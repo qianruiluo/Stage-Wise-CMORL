@@ -9,7 +9,7 @@ n_steps: 8192
 gae_coeff: 0.97
 max_grad_norm: 1.0
 actor_lr: 2e-5
-reward_critic_lr: 4e-4
+reward_critic_lr: 2e-4
 cost_critic_lr: 4e-4
 n_actor_iters: 20
 n_critic_iters: 20
@@ -25,12 +25,12 @@ clip_ratio: 0.03
 # for CMORL
 con_coeff: 1.0
 # reward_names: [com_pos, body_balance, vel, energy, style]
-preference: [1.0, 1.0, 1.0, 0.1, 10.0]
+preference: [10.0, 1.0, 1.0, 1.0, 1.0]
 # cost_names: [foot_contact, body_contact, joint_pos, joint_vel, joint_torque]
 con_thresholds: [0.25, 0.025, 0.025, 0.025, 0.03]
 # symmetric constraints
 is_sym_con: true
-sym_con_threshold: 0.02 # 0.2 rad ~= 11.5 deg, 0.12 rad ~= 6.9 deg
+sym_con_threshold: 0.12 # 0.2 rad ~= 11.5 deg, 0.12 rad ~= 6.9 deg
 
 # for backup
 backup_files: [
@@ -59,7 +59,7 @@ model:
             shape: [256, 128, 64]
             activation: ELU
         use_action_bound: false
-        log_std_init: -0.5
+        log_std_init: -0.4
         log_std_fix: true
     reward_critic:
         mlp:
