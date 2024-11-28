@@ -9,7 +9,7 @@ n_total_steps: 2000000000
 
 sim:
     physics_engine: 'physx'
-    sim_dt: 0.002
+    sim_dt: 0.001
     con_dt: 0.02
     substeps: 1
     up_axis: "z"
@@ -37,9 +37,9 @@ sim:
         ##########################################
 
 env:
-    num_envs: 4096
+    num_envs: 2048
     env_spacing: 2.0
-    history_len: 10
+    history_len: 15
     enable_camera_sensors: False
 
     reward_names: [com_pos, body_balance, vel, energy, style]
@@ -91,34 +91,36 @@ env:
 
     control:
         # reference: https://github.com/carlosferrazza/humanoid-bench/blob/main/humanoid_bench/assets/robots/h1_pos.xml
-        stiffness:                      # P gain [N*m/rad]
-            l_hip_pitch_joint: 40.0
-            l_hip_roll_joint: 40.0
-            l_thigh_joint: 40.0
-            l_calf_joint: 40.0
-            l_ankle_pitch_joint: 40.0
-            l_ankle_roll_joint: 40.0
-            r_hip_pitch_joint: 40.0
-            r_hip_roll_joint: 40.0
-            r_thigh_joint: 40.0
-            r_calf_joint: 40.0
-            r_ankle_pitch_joint: 40.0
-            r_ankle_roll_joint: 40.0
-        damping:                        # D gain [N*m*s/rad]
-            l_hip_pitch_joint: 0.6
-            l_hip_roll_joint: 0.6
-            l_thigh_joint: 0.6
-            l_calf_joint: 0.6
-            l_ankle_pitch_joint: 0.6
-            l_ankle_roll_joint: 0.6
-            r_hip_pitch_joint: 0.6
-            r_hip_roll_joint: 0.6
-            r_thigh_joint: 0.6
-            r_calf_joint: 0.6
-            r_ankle_pitch_joint: 0.6
-            r_ankle_roll_joint: 0.6
-        action_scale: 0.5 # target angle = actionScale * action + defaultAngle
-        action_smooth_weight: 0.1 # 1.0: no smoothing, 0.0: max smoothing
+        # stiffness:                      # P gain [N*m/rad]
+        #     l_hip_pitch_joint: 40.0
+        #     l_hip_roll_joint: 40.0
+        #     l_thigh_joint: 40.0
+        #     l_calf_joint: 40.0
+        #     l_ankle_pitch_joint: 40.0
+        #     l_ankle_roll_joint: 40.0
+        #     r_hip_pitch_joint: 40.0
+        #     r_hip_roll_joint: 40.0
+        #     r_thigh_joint: 40.0
+        #     r_calf_joint: 40.0
+        #     r_ankle_pitch_joint: 40.0
+        #     r_ankle_roll_joint: 40.0
+        # damping:                        # D gain [N*m*s/rad]
+        #     l_hip_pitch_joint: 0.6
+        #     l_hip_roll_joint: 0.6
+        #     l_thigh_joint: 0.6
+        #     l_calf_joint: 0.6
+        #     l_ankle_pitch_joint: 0.6
+        #     l_ankle_roll_joint: 0.6
+        #     r_hip_pitch_joint: 0.6
+        #     r_hip_roll_joint: 0.6
+        #     r_thigh_joint: 0.6
+        #     r_calf_joint: 0.6
+        #     r_ankle_pitch_joint: 0.6
+        #     r_ankle_roll_joint: 0.6
+        stiffness: 36.0
+        damping: 0.7
+        action_scale: 0.3 # target angle = actionScale * action + defaultAngle
+        action_smooth_weight: 1.0 # 1.0: no smoothing, 0.0: max smoothing
         
 
     learn:
@@ -145,4 +147,26 @@ env:
             21, 21, 21, 21, 21, 21,
             21, 21, 21, 21, 21, 21,
         ]
+
+
+    randomize:
+        is_randomized               : true
+        rand_period_motor_strength_s: 5.0
+        rand_period_gravity_s       : 5.0
+        rand_range_body_mass        : [-1.0, 2.0]
+        rand_range_com_pos_x        : [-0.02, 0.02]
+        rand_range_com_pos_y        : [-0.02, 0.02]
+        rand_range_com_pos_z        : [-0.03, 0.03]
+        rand_range_init_dof_pos     : [-0.1, 0.1]
+        rand_range_init_root_vel    : [-0.2, 0.2]
+        rand_range_motor_strength   : [0.9, 1.1]
+        rand_range_gravity          : [-0.5, 0.5]
+        rand_range_friction         : [0.1, 2.0]
+        rand_range_restitution      : [0.0, 0.4]
+        rand_range_motor_offset     : [-0.02, 0.02]
+        noise_range_dof_pos         : 0.01
+        noise_range_dof_vel         : 1.5
+        noise_range_body_orn        : 0.25
+        n_lag_action_steps          : 5
+        n_lag_imu_steps             : 0
         ########################

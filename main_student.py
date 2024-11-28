@@ -92,7 +92,7 @@ def train(args, task_cfg, algo_cfg):
     teacher_args.algo_name = algo_cfg['teacher']['algo_name']
     teacher_args.model_num = algo_cfg['teacher']['model_num']
     teacher_args.name = f"{(teacher_args.task_name.lower())}_{(teacher_args.algo_name.lower())}"
-    teacher_args.save_dir = f"results/{teacher_args.name}/seed_{args.seed}_Nov21_15-53-27"
+    teacher_args.save_dir = f"results/{teacher_args.name}/seed_{args.seed}_Nov25_18-52-28"
     backup_file_name = glob.glob(f"{teacher_args.save_dir}/backup/algo/*.yaml")[0]
     with open(backup_file_name, 'r') as f:
         teacher_algo_cfg = YAML().load(f)
@@ -325,8 +325,8 @@ if __name__ == "__main__":
     args.algo_name = algo_cfg['name']
     args.name = f"{(args.task_name.lower())}_{(args.algo_name.lower())}"
     # save_dir
-    args.save_dir = f"results/{args.name}/seed_{args.seed}_student_" + datetime.now().strftime("%b%d_%H-%M-%S")
-    # args.save_dir = f"results/{args.name}/seed_{args.seed}_student_Nov06_11-06-44"
+    # args.save_dir = f"results/{args.name}/seed_{args.seed}_student_" + datetime.now().strftime("%b%d_%H-%M-%S")
+    args.save_dir = f"results/{args.name}/seed_{args.seed}_student_Nov26_16-37-55"
     
     # device
     if torch.cuda.is_available() and args.device_type == 'gpu':

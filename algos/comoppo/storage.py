@@ -124,7 +124,10 @@ class ReplayBuffer:
         norm_reward_mean = 0.1
         norm_rewards_tensor = reward_rms.normalize(
             rewards_tensor, stages_tensor, default_mean=norm_reward_mean, default_std=norm_reward_std)
-        norm_rewards_tensor += norm_rewards_tensor*stage_completes_tensor*self.discount_factor/(1.0 - self.discount_factor) # if stage changes, add the discounted reward. Otherwise, use the current reward.
+        norm_rewards_tensor += norm_rewards_tensor*stage_completes_tensor*self.discount_factor/(1.0 - self.discount_factor) # if stage changes, add the discounted reward, because stage change can have long-term impact on the reward.
+        
+        # print("norm rewards: ", norm_rewards_tensor[0])
+        
         # costs不经过normalize，直接使用
         norm_costs_tensor = fails_tensor.unsqueeze(-1)*costs_tensor/(1.0 - self.discount_factor) + (1.0 - fails_tensor.unsqueeze(-1))*costs_tensor # if fail, add the discounted cost. Otherwise, use the current cost.
 
@@ -144,6 +147,7 @@ class ReplayBuffer:
         cost_targets = torch.zeros_like(costs_tensor) # (n_steps_per_env, n_envs, cost_dim)
         for t in reversed(range(len(reward_targets))):
             # reward_targets指的是t时刻的reward的target，即t时刻的reward加上t+1时刻估计的reward的value。如果没结束，还要加上reward_delta，即t时刻reward的gae乘以gae_coeff。
+            # These deltas represent the accumulated advantage, capturing the difference between the observed returns and the estimated values.
             reward_targets[t, :, :] = norm_rewards_tensor[t, :, :] \
                                     + self.discount_factor*(1.0 - fails_tensor[t, :].unsqueeze(-1))*next_reward_values_tensor[t, :, :] \
                                     + self.discount_factor*(1.0 - dones_tensor[t, :].unsqueeze(-1))*reward_delta

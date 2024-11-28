@@ -142,10 +142,12 @@ def run_mujoco(agent, cfg):
     count_lowlevel = 0
     
     # jump_time = 3.0 * np.random.rand() + 2.0
-    jump_period = 0.55
+    jump_period = 0.75
     cmd = [jump_period, 2.0, 0]
     world_z = np.array([0, 0, 1.0])
     dq_filtered = np.zeros(12, dtype=np.double)
+    
+    lag_joint_target_buffer = [np.zeros((cfg.env.num_actions), dtype=np.double) for _ in range(cfg.control.n_lag_action_steps + 1)]
     
     count_csv = 0
     first_flag=1
@@ -201,7 +203,7 @@ def run_mujoco(agent, cfg):
                     # obs[0, 40] = np.sin(2 * np.pi * sim_time * 1.0)
                     # obs[0, 41] = np.cos(2 * np.pi * sim_time * 1.0 + np.pi)
                     # obs[0, 42] = np.sin(2 * np.pi * sim_time * 1.0 + np.pi)
-                    obs[0, 27] = (sim_time / jump_period + 0.9) % 1.0
+                    obs[0, 27] = (sim_time / jump_period + 0.80) % 1.0
                     # obs[0, 27] = 0.1
                     
                     obs[0, 28:31] = cmd
@@ -238,8 +240,11 @@ def run_mujoco(agent, cfg):
                     
                     # Generate PD control
                     target_q_filtered = cfg.control.action_smooth_weight*target_q + (1.0 - cfg.control.action_smooth_weight)*target_q_filtered
+                    
+                lag_joint_target_buffer = lag_joint_target_buffer[1:] + [target_q_filtered]
+                joint_targets = lag_joint_target_buffer[0]
                 
-                tau = pd_control(target_q_filtered, q, cfg.robot_config.kps,
+                tau = pd_control(joint_targets, q, cfg.robot_config.kps,
                                 target_dq, dq, cfg.robot_config.kds)  # Calc torques
                 # print("tau:", tau)
 
@@ -282,12 +287,13 @@ if __name__ == '__main__':
             
             mujoco_model_path = f'../assets/robot_urdf/mjcf/pi_12dof_release_v1.xml'
             sim_duration = 60.0
-            dt = 0.0002
-            decimation = 100 # control_dt = 0.02s
+            dt = 0.0001
+            control_dt = 0.02
+            decimation = control_dt / dt # control_dt = 0.02s
 
         class robot_config:
-            kps = np.array([40]*(12), dtype=np.double)
-            kds = np.array([1.15]*(12), dtype=np.double)
+            kps = np.array([36]*(12), dtype=np.double)
+            kds = np.array([0.75]*(12), dtype=np.double)
             tau_limit = 21 * np.ones(12, dtype=np.double)
             
             
@@ -304,12 +310,13 @@ if __name__ == '__main__':
                 dof_pos = 1
                 dof_vel = 1
                 quat = 1.
-            clip_observations = 10.
-            clip_actions = 10.
+            clip_observations = 100.
+            clip_actions = 100.
             
         class control:
-            action_scale = 0.5
-            action_smooth_weight = 0.1
+            action_scale = 0.3
+            action_smooth_weight = 0.5
+            n_lag_action_steps = 5
     
     args.name = 'sim2sim'
     # deviceresults/piforjump_student/seed_1_student_Nov06_11-06-44/checkpoint/model_100001792.pt
