@@ -1,6 +1,11 @@
+# Acknowledgment
+
+This repository is derived from [Stage-Wise-CMORL](https://github.com/rllab-snu/Stage-Wise-CMORL) of [rllab-snu](https://github.com/rllab-snu).
+
+
 # Stage-Wise CMORL
 
-This is an official GitHub Repository for paper "Stage-Wise Reward Shaping for Acrobatic Robots: A Constrained Multi-Objective Reinforcement Learning Approach".
+This is an GitHub Repository for paper "Stage-Wise Reward Shaping for Acrobatic Robots: A Constrained Multi-Objective Reinforcement Learning Approach".
 
 ## Requirement
 
@@ -25,6 +30,7 @@ Stage-Wise-CMORL/
     └── assets/
     │     └── go1/
     │     └── h1/
+    |     └── pi/
     └── tasks/
     └── utils/
     └── main_student.py
