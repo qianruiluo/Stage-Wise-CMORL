@@ -117,8 +117,8 @@ env:
         #     r_calf_joint: 0.6
         #     r_ankle_pitch_joint: 0.6
         #     r_ankle_roll_joint: 0.6
-        stiffness: 36.0
-        damping: 0.7
+        stiffness: 34.0
+        damping: 0.9
         action_scale: 0.3 # target angle = actionScale * action + defaultAngle
         action_smooth_weight: 1.0 # 1.0: no smoothing, 0.0: max smoothing
         

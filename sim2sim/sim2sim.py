@@ -78,6 +78,7 @@ def quat_rotate_inverse(q, v):
 #     return np.array([roll_x, pitch_y, yaw_z]) 
 
 
+# sim2real: get_obs需要改成实际的观测值
 def get_obs(data):
     '''Extracts an observation from the mujoco data structure
     '''
@@ -93,8 +94,6 @@ def get_obs(data):
     
     # print("dq:", dq, "qvel:", data.qvel.astype(np.double)[-12:])
     # print("q:", q, "q2:", data.qpos.astype(np.double)[-12:])
-    
-    
     
     quat = data.sensor('orientation').data[[1, 2, 3, 0]].astype(np.double)
     r = R.from_quat(quat)
@@ -142,7 +141,7 @@ def run_mujoco(agent, cfg):
     count_lowlevel = 0
     
     # jump_time = 3.0 * np.random.rand() + 2.0
-    jump_period = 0.75
+    jump_period = 0.9
     cmd = [jump_period, 2.0, 0]
     world_z = np.array([0, 0, 1.0])
     dq_filtered = np.zeros(12, dtype=np.double)
@@ -169,6 +168,8 @@ def run_mujoco(agent, cfg):
 
             for _ in tqdm(range(int(cfg.sim_config.sim_duration / cfg.sim_config.dt)), desc="Simulating..."):
                 # Obtain an observation
+                
+                
                 
                 q, dq, quat, v, omega, gvec = get_obs(data)
                 q = q[-cfg.env.num_actions:]
@@ -197,16 +198,11 @@ def run_mujoco(agent, cfg):
 
                     obs[0, 0:3] = body_ori
                     obs[0, 3:15] = q
-                    # obs[0, 15:27] = dq_filtered * cfg.normalization.obs_scales.dof_vel
-                    obs[0, 15:27] = action
-                    # obs[0, 39] = np.cos(2 * np.pi * sim_time * 1.0)
-                    # obs[0, 40] = np.sin(2 * np.pi * sim_time * 1.0)
-                    # obs[0, 41] = np.cos(2 * np.pi * sim_time * 1.0 + np.pi)
-                    # obs[0, 42] = np.sin(2 * np.pi * sim_time * 1.0 + np.pi)
-                    obs[0, 27] = (sim_time / jump_period + 0.80) % 1.0
-                    # obs[0, 27] = 0.1
+                    obs[0, 15:27] = dq_filtered * cfg.normalization.obs_scales.dof_vel
+                    obs[0, 27:39] = action
+                    obs[0, 39] = (sim_time / jump_period + 0.80) % 1.0
                     
-                    obs[0, 28:31] = cmd
+                    obs[0, 40:43] = cmd
 
                     # obs = np.clip(obs, -cfg.normalization.clip_observations, cfg.normalization.clip_observations)
                     if first_flag:
@@ -240,7 +236,7 @@ def run_mujoco(agent, cfg):
                     
                     # Generate PD control
                     target_q_filtered = cfg.control.action_smooth_weight*target_q + (1.0 - cfg.control.action_smooth_weight)*target_q_filtered
-                    
+                
                 lag_joint_target_buffer = lag_joint_target_buffer[1:] + [target_q_filtered]
                 joint_targets = lag_joint_target_buffer[0]
                 
@@ -256,9 +252,14 @@ def run_mujoco(agent, cfg):
                 data.ctrl = tau
                 # print("action:", action)
 
+                
+                # sim2real: tau需要给到电机
+                # <--------------------------
                 mujoco.mj_step(model, data)
                 viewer.render()
+                # --------------------------->
                 count_lowlevel += 1
+                
 
     viewer.close()
 
@@ -293,15 +294,15 @@ if __name__ == '__main__':
 
         class robot_config:
             kps = np.array([36]*(12), dtype=np.double)
-            kds = np.array([0.75]*(12), dtype=np.double)
+            kds = np.array([1.03]*(12), dtype=np.double)
             tau_limit = 21 * np.ones(12, dtype=np.double)
             
             
         class env:
             num_actions = 12
-            frame_stack = 10
-            num_single_obs = 3 + 12*2 + 1 + 3
-            num_observations = (3 + 12*2 + 1 + 3) * 10
+            frame_stack = 15
+            num_single_obs = 3 + 12*3 + 1 + 3
+            num_observations = (3 + 12*3 + 1 + 3) * 15
             
         class normalization:
             class obs_scales:
@@ -315,7 +316,7 @@ if __name__ == '__main__':
             
         class control:
             action_scale = 0.3
-            action_smooth_weight = 0.5
+            action_smooth_weight = 0.3
             n_lag_action_steps = 5
     
     args.name = 'sim2sim'
@@ -338,4 +339,6 @@ if __name__ == '__main__':
         args.__dict__[key] = algo_cfg[key]
     agent = Agent(args)
     agent.load(args.model_num)
+    
+    agent.obs_rms.save_yaml(args.model_num) # sim2real: uncomment this line to save the mean and var to csv file
     run_mujoco(agent, Sim2simCfg())

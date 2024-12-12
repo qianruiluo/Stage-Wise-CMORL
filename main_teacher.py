@@ -341,7 +341,7 @@ if __name__ == "__main__":
     args.name = f"{(args.task_name.lower())}_{(args.algo_name.lower())}"
     # save_dir
     # args.save_dir = f"results/{args.name}/seed_{args.seed}_" + datetime.now().strftime("%b%d_%H-%M-%S") # for new folder
-    args.save_dir = f"results/{args.name}/seed_{args.seed}_Nov25_18-52-28" #for existing folder
+    args.save_dir = f"results/{args.name}/seed_{args.seed}_Dec12_10-50-01" #for existing folder
 
     
     # args.save_dir = f"results/{args.name}/seed_{args.seed}"

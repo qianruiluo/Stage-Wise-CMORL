@@ -3,6 +3,8 @@ import numpy as np
 import pickle
 import torch
 import os
+import yaml
+
 
 class ObsRMS(object):
     def __init__(self, name:str, obs_dim:int, history_len:int, device:torch.device, max_cnt=None):
@@ -45,7 +47,12 @@ class ObsRMS(object):
         reshaped_mean = self.cur_mean.view(1, -1).tile(1, self.history_len)
         reshaped_var = self.cur_var.view(1, -1).tile(1, self.history_len)
         # print("obs:", reshaped_obs)
-        # print("mean:", reshaped_mean)
+        
+        # sim2real: uncomment the following two lines and run the policy. use the mean and var to normalize the observation.
+        # <------------------
+        print("mean:", reshaped_mean)
+        print("var:", reshaped_var)
+        # ------------------>
         
         norm_obs = (reshaped_obs - reshaped_mean)/torch.sqrt(reshaped_var + 1e-8)
         return norm_obs.view_as(observations)*shifted_std + shifted_mean
@@ -70,12 +77,15 @@ class ObsRMS(object):
             self.upgrade()
             print("obs scale load success.")
 
-    def save(self, model_num):
-        file_name = f"obs_scale/{model_num}.pkl"
+    def save_yaml(self, model_num):
+        file_name = f"obs_scale/{model_num}.yaml"
         if not os.path.exists(os.path.dirname(file_name)):
             os.makedirs(os.path.dirname(file_name))
-        with open(file_name, 'wb') as f:
-            mean = self.mean.cpu().numpy()
-            var = self.var.cpu().numpy()
-            count = self.count
-            pickle.dump([mean, var, count], f)
+        mean = self.mean.cpu().numpy().tolist()
+        var = self.var.cpu().numpy().tolist()
+        with open(file_name, 'w', newline='') as f:
+            f.write("# copy this to sim2real/config.yaml\n")
+            f.write("obs_mean: " + str(mean) + "\n")
+            f.write("obs_var: " + str(var) + "\n")
+            
+            

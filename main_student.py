@@ -326,7 +326,7 @@ if __name__ == "__main__":
     args.name = f"{(args.task_name.lower())}_{(args.algo_name.lower())}"
     # save_dir
     # args.save_dir = f"results/{args.name}/seed_{args.seed}_student_" + datetime.now().strftime("%b%d_%H-%M-%S")
-    args.save_dir = f"results/{args.name}/seed_{args.seed}_student_Nov26_16-37-55"
+    args.save_dir = f"results/{args.name}/seed_{args.seed}_student_Nov28_18-51-32"
     
     # device
     if torch.cuda.is_available() and args.device_type == 'gpu':

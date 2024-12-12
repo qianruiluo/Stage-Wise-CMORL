@@ -5,6 +5,7 @@ from normalizer import ObsRMS
 import numpy as np
 import torch
 import os
+import copy
 
 EPS = 1e-8
 torch.set_printoptions(precision=3,linewidth=200, sci_mode=False)
@@ -40,15 +41,16 @@ class Agent:
         
         norm_obs_tensor = self.obs_rms.normalize(obs_tensor) 
         
-        last_obs = obs_tensor[0][-31:].detach().cpu().numpy()
+        last_obs = obs_tensor[0][-43:].detach().cpu().numpy()
         print("----------------------------------------------")
         # print("obs_tensor:\n", obs_tensor)
         # print("norm_obs_tensor:\n", norm_obs_tensor)
         print("obs_ori:", last_obs[0:3])
         print("obs_q:", last_obs[3:15])
-        print("obs_action:", last_obs[15:27])
-        print("obs_phase:", last_obs[27])
-        print("obs_command:", last_obs[28:31])
+        print("obs_dq:", last_obs[15:27])
+        print("obs_action:", last_obs[27:39])
+        print("obs_phase:", last_obs[39])
+        print("obs_command:", last_obs[40:43])
         
         epsilon_tensor = torch.randn(norm_obs_tensor.shape[:-1] + (self.action_dim,), device=self.device)
         self.actor.updateActionDist(norm_obs_tensor, epsilon_tensor)
@@ -71,11 +73,30 @@ class Agent:
             checkpoint = torch.load(checkpoint_file, map_location=self.device)
             self.actor.load_state_dict(checkpoint['actor'])
             print(f'[{self.name}] load success.')
+            self.save(model_num)
             return int(model_num)
         else:
             self.actor.initialize()
             print(f'[{self.name}] load fail.')
             return 0
+        
+    def save(self, model_num):
+
+        example_input = torch.randn(self.obs_dim, device="cpu")
+        path = "checkpoint/pi_forjump_1_policy.pt"
+        actor_copy = copy.deepcopy(self.actor).to("cpu")
+        actor_copy.eval()
+        
+        
+        
+        traced_script_module = torch.jit.trace(actor_copy, example_input)
+        traced_script_module.save(path)
+        
+        model = torch.jit.load(path)
+        # print("save success. \ntest output: ", model(example_input), "\nmodel output: ", self.actor(example_input))
+        
+        
+        # torch.save(self.actor.model, f"checkpoint/model_full_{model_num}.pt")
 
     ################
     # private method

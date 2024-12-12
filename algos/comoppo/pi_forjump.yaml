@@ -23,14 +23,14 @@ max_kl: 0.0002
 clip_ratio: 0.03
 
 # for CMORL
-con_coeff: 1.0
+con_coeff: 3.0
 # reward_names: [com_pos, body_balance, vel, energy, style]
-preference: [1.0, 1.0, 1.0, 1.0, 1.0]
+preference: [10.0, 10.0, 1.0, 0.1, 10.0]
 # cost_names: [foot_contact, body_contact, joint_pos, joint_vel, joint_torque]
-con_thresholds: [0.01, 0.025, 0.02, 0.025, 0.02]
+con_thresholds: [0.001, 0.025, 0.02, 0.025, 0.02]
 # symmetric constraints
 is_sym_con: true
-sym_con_threshold: 0.05 # 0.2 rad ~= 11.5 deg, 0.12 rad ~= 6.9 deg
+sym_con_threshold: 0.04 # 0.2 rad ~= 11.5 deg, 0.12 rad ~= 6.9 deg
 
 # for backup
 backup_files: [
@@ -58,8 +58,8 @@ model:
         mlp:
             shape: [512, 256, 128]
             activation: ELU
-        use_action_bound: false
-        log_std_init: -0.4
+        use_action_bound: true
+        log_std_init: -0.5
         log_std_fix: true
     reward_critic:
         mlp:

@@ -82,7 +82,7 @@ class Actor(ActorBase):
     def updateActionDist(self, obs:torch.Tensor, state:torch.Tensor, phase:torch.Tensor, epsilon:torch.Tensor) -> None:
         self.action_mean, self.action_log_std, self.action_std = \
             self.forward(obs, state, phase)
-        self.normal_action = self.action_mean + epsilon*self.action_std
+        self.normal_action = self.action_mean + epsilon*(self.action_std)
         # print("epsilon action: ", epsilon*self.action_std)
         self.action_dist = torch.distributions.Normal(self.action_mean, self.action_std)
     
