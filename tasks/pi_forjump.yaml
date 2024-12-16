@@ -117,7 +117,7 @@ env:
         #     r_calf_joint: 0.6
         #     r_ankle_pitch_joint: 0.6
         #     r_ankle_roll_joint: 0.6
-        stiffness: 34.0
+        stiffness: 36.0
         damping: 0.9
         action_scale: 0.3 # target angle = actionScale * action + defaultAngle
         action_smooth_weight: 1.0 # 1.0: no smoothing, 0.0: max smoothing
@@ -164,6 +164,9 @@ env:
         rand_range_friction         : [0.1, 2.0]
         rand_range_restitution      : [0.0, 0.4]
         rand_range_motor_offset     : [-0.02, 0.02]
+        rand_norm_push_force        : 600
+        rand_norm_push_torque       : 150
+        rand_push_period            : 10
         noise_range_dof_pos         : 0.01
         noise_range_dof_vel         : 1.5
         noise_range_body_orn        : 0.25

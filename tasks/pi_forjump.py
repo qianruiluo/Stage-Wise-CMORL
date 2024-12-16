@@ -84,6 +84,9 @@ class Env(VecTask):
         self.rand_range_friction = self.cfg["env"]["randomize"]["rand_range_friction"]
         self.rand_range_restitution = self.cfg["env"]["randomize"]["rand_range_restitution"]
         self.rand_range_motor_offset = self.cfg["env"]["randomize"]["rand_range_motor_offset"]
+        self.rand_norm_push_force = self.cfg["env"]["randomize"]["rand_norm_push_force"]
+        self.rand_norm_push_torque = self.cfg["env"]["randomize"]["rand_norm_push_torque"]
+        self.rand_push_period = self.cfg["env"]["randomize"]["rand_push_period"]
         self.noise_range_dof_pos = self.cfg["env"]["randomize"]["noise_range_dof_pos"]
         self.noise_range_dof_vel = self.cfg["env"]["randomize"]["noise_range_dof_vel"]
         self.noise_range_body_orn = self.cfg["env"]["randomize"]["noise_range_body_orn"]
@@ -133,6 +136,8 @@ class Env(VecTask):
         self.gait_freq = torch_utils.to_torch(
             self.cfg["env"]["learn"]["gait_frequency"], 
             dtype=torch.float32, device=self.device, requires_grad=False)
+        
+        self.random_force_interval = 5  # Adjust as needed
 
         # for buffer
         self.rew_buf = torch.zeros((self.num_envs, self.num_rewards),
@@ -577,7 +582,7 @@ class Env(VecTask):
         # self.command_vel[env_ids, 1] = torch_utils.torch_rand_float(-0.5, 0.5, (len(env_ids), 1), device=self.device).squeeze()
         self.command_vel[env_ids, 0] = 2.0
         self.command_vel[env_ids, 1] = 0.0
-        self.jump_period_buf[env_ids] = torch_utils.torch_rand_float(1.9, 2.0, (len(env_ids), 1), device=self.device).squeeze()
+        self.jump_period_buf[env_ids] = torch_utils.torch_rand_float(1.4, 1.5, (len(env_ids), 1), device=self.device).squeeze()
         # self.jump_period_buf[env_ids] = torch.clip(self.jump_period_buf[env_ids], 0.7, 1.3)
         self.first_jump_time_buf[env_ids] = torch_utils.torch_rand_float(0.05, 0.15, (len(env_ids), 1), device=self.device).squeeze()
         self.last_jump_time_buf[env_ids] = - self.jump_period_buf[env_ids] + self.first_jump_time_buf[env_ids]
@@ -670,6 +675,31 @@ class Env(VecTask):
         self.joint_targets[:] = self.action_smooth_weight*(actions*self.action_scale + self.default_dof_positions) \
                                                             + (1.0 - self.action_smooth_weight)*self.joint_targets
         self.gym.set_dof_position_target_tensor(self.sim, gymtorch.unwrap_tensor(self.joint_targets))
+        
+        # Apply random push forces at specified intervals
+        if self.is_randomized and self.common_step_counter % self.rand_push_period == 0:
+            # Generate random forces for each environment
+            random_forces = torch.normal(mean=0.0, std=self.rand_norm_push_force, size=(self.num_envs, 3), device=self.device)
+            # Initialize force tensors
+            forces = torch.zeros((self.num_envs, self.num_bodies, 3), device=self.device)
+            # Apply forces to the base link (assuming link 0 is the base)
+            forces[:, 0, :] = random_forces
+            # Apply the forces in the simulation
+            # Generate random torques
+            random_torques = torch.normal(mean=0.0, std=self.rand_norm_push_torque, size=(self.num_envs, 3), device=self.device)
+
+            # Initialize torque tensors
+            torques = torch.zeros((self.num_envs, self.num_bodies, 3), device=self.device)
+            # Apply torques to the base link
+            torques[:, 0, :] = random_torques
+            # Apply the forces and torques
+            forces_gym = gymtorch.unwrap_tensor(forces)
+            torques_gym = gymtorch.unwrap_tensor(torques)
+
+            # Call the simulator function with unwrapped tensors
+            self.gym.apply_rigid_body_force_tensors(self.sim, forces_gym, torques_gym, gymapi.LOCAL_SPACE)
+            
+            # print("applied force: ", forces[0, 0, :], torques[0, 0, :])
 
     def post_physics_step(self):
         """
@@ -693,10 +723,10 @@ class Env(VecTask):
         if self.is_randomized:
             self.randomize()
         # ============================= #
-        # calculate roll, pitch, and yaw
-        roll, pitch, yaw = torch_utils.quat_to_euler(self.base_quaternions)
-        # output pitch for env 0
-        print("pitch:", pitch[0])
+        # # calculate roll, pitch, and yaw
+        # roll, pitch, yaw = torch_utils.quat_to_euler(self.base_quaternions)
+        # # output pitch for env 0
+        # print("pitch:", pitch[0])
         
 
         # stage 0: stand, stage 1: down, stage 2: jump, stage 3: back turn, stage 4: land
@@ -708,7 +738,7 @@ class Env(VecTask):
         # print("com_height:", torch.mean(com_height), com_height[0])
         # print("jump_height:", jump_height[0])
         
-        sit_period_time = 0.8
+        sit_period_time = 0.6
         sit_progress = (self.progress_buf*self.control_dt - self.sit_time_buf) / sit_period_time
         sit_progress = torch.clip(sit_progress, 0.0, 1.0)
         sit_progress_smooth = 0.5 - 0.5 * torch.cos(sit_progress * (torch.pi))
@@ -748,7 +778,7 @@ class Env(VecTask):
         body_z = torch_utils.quat_rotate_inverse(self.base_quaternions, self.world_z)
         # print("body_z:", torch.mean(-torch.arccos(body_z[0, 2])))
         self.rew_buf[:, 1] =  self.stage_buf[:, 0]*(-torch.arccos(torch.clamp(body_z[:, 2], -1.0, 1.0)))
-        self.rew_buf[:, 1] += self.stage_buf[:, 1]*(-torch.arccos(torch.clamp(body_z[:, 2], -1.0, 1.0)))
+        self.rew_buf[:, 1] += self.stage_buf[:, 1]*(-torch.arccos(torch.clamp(body_z[:, 2], -1.0, 1.0))) * (body_z[:, 2] < -0.2)
         self.rew_buf[:, 1] += self.stage_buf[:, 2]*(-torch.arccos(torch.clamp(body_z[:, 2], -1.0, 1.0)))
         self.rew_buf[:, 1] += self.stage_buf[:, 3]*(-torch.arccos(torch.clamp(body_z[:, 2], -1.0, 1.0)))
         self.rew_buf[:, 1] += self.stage_buf[:, 4]*(-torch.arccos(torch.clamp(body_z[:, 2], -1.0, 1.0)))
@@ -818,7 +848,7 @@ class Env(VecTask):
             (torch.abs(self.dof_torques) > self.dof_torques_upper_limits).to(torch.float), dim=-1)
         # self.cost_buf[:, 4] = torch.mean((torch.abs(self.dof_torques) > self.dof_torques_upper_limits) \
         #         * torch.square((torch.abs(self.dof_torques) - self.dof_torques_upper_limits)), dim=-1)
-        if torch.any(self.dof_torques[0] > 19.0):
+        if torch.any(self.dof_torques[0] > 21.0):
             print("torque: ", self.dof_torques[0])
         
         for i in range(0, 5):
@@ -865,9 +895,9 @@ class Env(VecTask):
         self.stage_buf[:, 0] = (1.0 - from0_to1)*self.stage_buf[:, 0]
         self.stage_buf[:, 1] = from0_to1 + (1.0 - from0_to1)*self.stage_buf[:, 1]
         
-        print("stage: ", self.stage_buf[0, :])
-        print("sit progress: ", sit_progress_smooth[0])
-        print("jump progress: ", jump_progress[0])
+        # print("stage: ", self.stage_buf[0, :])
+        # print("sit progress: ", sit_progress_smooth[0])
+        # print("jump progress: ", jump_progress[0])
         
 
         jump_masks = from1_to2
